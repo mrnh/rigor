@@ -1,9 +1,17 @@
-name: Publish to PyPI
+name: Publish
 
 # Triggered by publishing a GitHub Release (tag the release vX.Y.Z to
-# match the version in pyproject.toml). Also runnable by hand for a
-# dry run that stops short of the actual upload (see the `if` guard on
-# the publish job).
+# match the version in pyproject.toml -- and server.json, checked by
+# tests/test_release_metadata.py). Also runnable by hand for a dry run
+# that stops short of the actual uploads (see the `if` guards on the
+# publish jobs).
+#
+# Publishes to two independent places, both via OIDC (no stored
+# tokens): PyPI (pypa/gh-action-pypi-publish, Trusted Publishing) and
+# the MCP Registry (mcp-publisher, github-oidc auth -- works because
+# this repo's name matches the io.github.mrnh/rigor-mcp namespace in
+# server.json). A release only needs to be tagged once; both targets
+# update from that single trigger.
 on:
   release:
     types: [published]
@@ -56,3 +64,20 @@ jobs:
           # tagged retroactively, or a re-run) succeed as a no-op
           # instead of failing the whole workflow.
           skip-existing: true
+
+  publish-mcp-registry:
+    needs: test
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # required for the MCP Registry's GitHub OIDC auth -- no stored token
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+      - name: Publish server to MCP Registry
+        run: ./mcp-publisher publish
