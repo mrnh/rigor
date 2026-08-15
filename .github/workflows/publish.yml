@@ -51,3 +51,8 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Lets a Release whose version is already on PyPI (e.g. one
+          # tagged retroactively, or a re-run) succeed as a no-op
+          # instead of failing the whole workflow.
+          skip-existing: true
