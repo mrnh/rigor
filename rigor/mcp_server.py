@@ -28,14 +28,14 @@ function in rigor.inference / rigor.effect_size / rigor.power /
 rigor.corrections -- deliberately kept with no logic of its own beyond
 converting a dataclass result to a plain dict. Smoke-tested against a
 real MCP client (stdio transport, tool discovery + representative calls
-across all 17 tools; see tests/test_mcp_server.py).
+across all 30 tools; see tests/test_mcp_server.py).
 
 Every tool carries the same ToolAnnotations (_PURE): every one of them
 is a stateless, deterministic calculation over its arguments -- no I/O,
 no external calls, no mutation, calling twice with the same input always
 gives the same answer. read_only_hint/idempotent_hint=True and
 destructive_hint/open_world_hint=False are simply true statements about
-all 17, not a per-tool judgment call.
+all 30, not a per-tool judgment call.
 
 Every parameter also carries an explicit Field(description=...) rather
 than relying on the docstring alone: the MCP SDK does not parse a
@@ -51,11 +51,19 @@ One deliberate exception to "no logic of its own": cohens_d returns a
 dict rather than a bare float, because rigor.effect_size.cohens_d
 correctly returns +-inf for zero-variance samples, but MCP's structured
 content serializes non-finite floats to JSON null, which fails a bare
-number-typed output schema. The wrapper catches that case and reports
+*number-typed* output schema. The wrapper catches that case and reports
 it as an explicit null value plus a warning instead of letting the call
-fail. Every non-finite-capable tool needs this same treatment; cohens_d
-is the only one exposed here that can produce one -- cohens_h and
-cramers_v are bounded and always finite for valid inputs.
+fail. That's specific to bare-scalar-returning tools: every dict-
+returning tool (everything using _result_dict/_correction_dict/
+_regression_dict) has been confirmed over real stdio to pass a non-
+finite field (e.g. fisher_exact_test's odds ratio for a zero cell, or a
+t-statistic's +-inf degenerate case) through untouched as JSON's
+non-standard `Infinity`/`-Infinity`, since a generic dict return doesn't
+get a strict per-field number schema the way a bare float return does.
+Of the bare-float-returning tools, cohens_d is the only one that can
+produce a non-finite value; cohens_h, cramers_v, eta_squared,
+omega_squared, and rank_biserial_correlation are all bounded and always
+finite for valid inputs.
 """
 import math
 from typing import List
@@ -76,12 +84,12 @@ from typing import Annotated
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from rigor import corrections, effect_size, inference, power
+from rigor import correlation, corrections, effect_size, inference, nonparametric, power, regression
 
 mcp = MCPServer("rigor")
 
 # Shared by every tool below -- see the module docstring for why this is
-# a true statement about all 17 rather than a per-tool judgment call.
+# a true statement about all 30 rather than a per-tool judgment call.
 _PURE = ToolAnnotations(
     read_only_hint=True,
     destructive_hint=False,
@@ -118,6 +126,23 @@ def _correction_dict(result: corrections.CorrectionResult) -> dict:
         "reject": result.reject,
         "adjusted_alpha": result.adjusted_alpha,
         "citation": result.citation,
+    }
+
+
+def _regression_dict(result: regression.RegressionResult) -> dict:
+    return {
+        "slope": result.slope,
+        "intercept": result.intercept,
+        "r_squared": result.r_squared,
+        "n": result.n,
+        "df": result.df,
+        "slope_se": result.slope_se,
+        "slope_t": result.slope_t,
+        "slope_p_value": result.slope_p_value,
+        "slope_confidence_interval": result.slope_confidence_interval,
+        "confidence_level": result.confidence_level,
+        "citation": result.citation,
+        "warnings": result.warnings,
     }
 
 
@@ -240,6 +265,38 @@ def one_way_anova(
 
 
 @mcp.tool(annotations=_PURE)
+def levene_test(
+    groups: Annotated[List[List[float]], Field(description="one list of observations per group; at least 2 groups, each with at least 2 observations")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """Test whether two or more groups have equal population variances
+    (homogeneity of variance) -- use this to decide equal_var for
+    two_sample_t_test, or to sanity-check one_way_anova's
+    equal-variance assumption. Uses the Brown-Forsythe variant
+    (deviations from each group's median), more robust to non-normal
+    data than the original mean-based Levene's test. Returns the same
+    shape as one_way_anova (it's computed as one internally, on
+    absolute deviations from each group's median)."""
+    return _result_dict(inference.levene_test(*groups), alpha)
+
+
+@mcp.tool(annotations=_PURE)
+def fisher_exact_test(
+    table: Annotated[List[List[int]], Field(description="2x2 contingency table as [[a, b], [c, d]], raw non-negative integer counts")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """Test whether the row and column variables of a 2x2 contingency
+    table are independent -- exact (via the hypergeometric distribution
+    over all tables with the same margins), unlike
+    chi_square_independence's chi-squared approximation. Use this
+    instead whenever chi_square_independence warns an expected cell
+    count is below 5, or whenever the sample is small. 2x2 tables only.
+    Returns the sample odds ratio as ``statistic`` (can be inf/0 for a
+    zero cell), a two-tailed p-value, a citation, and warnings."""
+    return _result_dict(inference.fisher_exact_test(table), alpha)
+
+
+@mcp.tool(annotations=_PURE)
 def cohens_d(
     a: Annotated[List[float], Field(description="first sample")],
     b: Annotated[List[float], Field(description="second sample")],
@@ -298,6 +355,140 @@ def cramers_v(
 
 
 @mcp.tool(annotations=_PURE)
+def eta_squared(
+    groups: Annotated[List[List[float]], Field(description="one list of observations per group; at least 2 groups")],
+) -> float:
+    """Effect size for a one-way ANOVA: proportion of total variance
+    explained by group membership. Use alongside one_way_anova, which
+    tells you whether groups differ but not how much of the variance
+    that accounts for. Rough guidance: ~0.01 small, ~0.06 medium, ~0.14
+    large. Biased upward for small samples -- prefer omega_squared when
+    that matters. Returns a float in [0, 1]."""
+    return effect_size.eta_squared(*groups)
+
+
+@mcp.tool(annotations=_PURE)
+def omega_squared(
+    groups: Annotated[List[List[float]], Field(description="one list of observations per group; at least 2 groups")],
+) -> float:
+    """Effect size for a one-way ANOVA, less biased than eta_squared for
+    small samples since it subtracts out the variance explained by
+    chance alone. Use alongside one_way_anova. Can be slightly negative
+    when the true effect is near zero -- that's expected, not an error."""
+    return effect_size.omega_squared(*groups)
+
+
+@mcp.tool(annotations=_PURE)
+def rank_biserial_correlation(
+    u1_statistic: Annotated[float, Field(description="the statistic returned by mann_whitney_u (U for the first sample passed to it)")],
+    n1: Annotated[int, Field(description="size of the first sample passed to mann_whitney_u")],
+    n2: Annotated[int, Field(description="size of the second sample passed to mann_whitney_u")],
+) -> float:
+    """Effect size for a Mann-Whitney U test. Call after mann_whitney_u,
+    passing its statistic and the two sample sizes. Positive means
+    sample 1's values tend to exceed sample 2's; negative means the
+    reverse; 0 is no tendency either way. Returns a float in [-1, 1];
+    rough guidance mirrors Cohen's d: ~0.1 small, ~0.3 medium, ~0.5
+    large."""
+    return effect_size.rank_biserial_correlation(u1_statistic, n1, n2)
+
+
+@mcp.tool(annotations=_PURE)
+def pearson_correlation(
+    x: Annotated[List[float], Field(description="first variable, one value per observation")],
+    y: Annotated[List[float], Field(description="second variable, same length and pairing order as x")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """Test for a *linear* association between two paired variables --
+    e.g. "does hours studied predict test score?" statistic is r itself
+    (in [-1, 1]), not a t-statistic. Returns r, df (n-2), a two-tailed
+    p-value (H0: r=0), a confidence interval for r via the Fisher
+    z-transform, a citation, and warnings. Use spearman_correlation
+    instead if the relationship may be monotonic but not linear, or if
+    outliers shouldn't dominate the result. Use simple_linear_regression
+    instead for the actual slope (units of y per unit of x), not just
+    the strength of association."""
+    return _result_dict(correlation.pearson_correlation(x, y), alpha)
+
+
+@mcp.tool(annotations=_PURE)
+def spearman_correlation(
+    x: Annotated[List[float], Field(description="first variable, one value per observation")],
+    y: Annotated[List[float], Field(description="second variable, same length and pairing order as x")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """Test for a *monotonic* association between two paired variables,
+    via the Pearson correlation of their ranks -- doesn't assume
+    linearity and is far less sensitive to outliers' exact magnitude
+    than pearson_correlation. Same return shape as pearson_correlation
+    (statistic is rho itself, in [-1, 1])."""
+    return _result_dict(correlation.spearman_correlation(x, y), alpha)
+
+
+@mcp.tool(annotations=_PURE)
+def simple_linear_regression(
+    x: Annotated[List[float], Field(description="the predictor variable, one value per observation")],
+    y: Annotated[List[float], Field(description="the outcome variable, same length and pairing order as x")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """Fit y = intercept + slope * x by ordinary least squares -- single
+    predictor only. Reports the slope (change in y per unit of x), the
+    intercept, R^2 (proportion of y's variance explained by x), and a
+    significance test + confidence interval for the slope (H0:
+    slope=0). Use pearson_correlation instead if you only need the
+    strength of a linear association, not its actual units/magnitude."""
+    return _regression_dict(regression.simple_linear_regression(x, y))
+
+
+@mcp.tool(annotations=_PURE)
+def mann_whitney_u(
+    a: Annotated[List[float], Field(description="first independent sample")],
+    b: Annotated[List[float], Field(description="second independent sample")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """The non-parametric alternative to two_sample_t_test -- use when
+    that test's own small-n warning makes a normal-theory result
+    suspect, or the data is ordinal/skewed. Tests whether values from
+    sample a are systematically larger or smaller than values from
+    sample b, by ranking the combined data rather than assuming normal
+    populations. statistic is U for sample a; pair with
+    rank_biserial_correlation for a standardized effect size. Returns
+    the same result shape as the parametric tests (statistic, p_value,
+    citation, warnings)."""
+    return _result_dict(nonparametric.mann_whitney_u(a, b), alpha)
+
+
+@mcp.tool(annotations=_PURE)
+def wilcoxon_signed_rank(
+    a: Annotated[List[float], Field(description="first measurement of each pair, e.g. 'before'")],
+    b: Annotated[List[float], Field(description="second measurement of each pair, e.g. 'after' -- same length and pairing order as a")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """The non-parametric alternative to paired_t_test -- use when that
+    test's own small-n warning makes a normal-theory result suspect.
+    Tests whether the median of the paired differences is zero, by
+    ranking the absolute differences rather than assuming they're
+    normally distributed. Pairs with a zero difference are dropped (and
+    counted in a warning), the standard procedure. statistic is T =
+    min(W+, W-)."""
+    return _result_dict(nonparametric.wilcoxon_signed_rank(a, b), alpha)
+
+
+@mcp.tool(annotations=_PURE)
+def kruskal_wallis(
+    groups: Annotated[List[List[float]], Field(description="one list of observations per group; at least 2 groups")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """The non-parametric alternative to one_way_anova -- use when that
+    test's own small-df warning makes a normal-theory result suspect.
+    Tests whether all groups are drawn from the same distribution, by
+    ranking the combined data rather than assuming normal populations.
+    A significant result means at least one group differs, not which
+    one -- same caveat as one_way_anova."""
+    return _result_dict(nonparametric.kruskal_wallis(*groups), alpha)
+
+
+@mcp.tool(annotations=_PURE)
 def sample_size_for_two_sample_t_test(
     effect_size_d: Annotated[float, Field(description="the Cohen's d you want to be able to detect")],
     alpha: _Alpha = 0.05,
@@ -324,6 +515,35 @@ def power_for_two_sample_t_test(
     doesn't exist. Use sample_size_for_two_sample_t_test instead to
     solve for n given a target power. Returns a float in [alpha, 1]."""
     return power.power_two_sample_t_test(n_per_group, effect_size_d, alpha)
+
+
+@mcp.tool(annotations=_PURE)
+def sample_size_for_one_sample_t_test(
+    effect_size_d: Annotated[float, Field(description="the Cohen's d you want to be able to detect")],
+    alpha: _Alpha = 0.05,
+    target_power: _TargetPower = 0.8,
+) -> dict:
+    """How many observations are needed to detect a given Cohen's d with
+    a one-sample (or paired) t-test at the target power. Use for
+    paired_t_test too -- a paired t-test is a one-sample t-test on the
+    differences, so the same power formula applies. Returns a
+    continuous value and a rounded-up integer to actually use."""
+    n = power.sample_size_one_sample_t_test(effect_size_d, alpha, target_power)
+    return {"n_exact": n, "n_rounded_up": math.ceil(n)}
+
+
+@mcp.tool(annotations=_PURE)
+def power_for_one_sample_t_test(
+    n: Annotated[float, Field(description="planned (or actual) number of observations")],
+    effect_size_d: Annotated[float, Field(description="the Cohen's d you want to be able to detect")],
+    alpha: _Alpha = 0.05,
+) -> float:
+    """Statistical power to detect a given Cohen's d with n observations,
+    using a one-sample (or paired) t-test. Use for paired_t_test too --
+    it's a one-sample t-test on the differences, so the same power
+    formula applies. Use sample_size_for_one_sample_t_test instead to
+    solve for n given a target power. Returns a float in [alpha, 1]."""
+    return power.power_one_sample_t_test(n, effect_size_d, alpha)
 
 
 @mcp.tool(annotations=_PURE)

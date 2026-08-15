@@ -52,7 +52,7 @@ class TestMCPServer(unittest.TestCase):
         _, names = asyncio.run(_call(
             "one_sample_t_test", {"data": [1, 2, 3, 4, 5], "mu0": 0}
         ))
-        self.assertEqual(len(names), 17)
+        self.assertEqual(len(names), 30)
 
     def test_sample_size_matches_cohen_1988_reference_case(self):
         # d=0.5, alpha=.05, power=.80 -> textbook answer n~=64 per group.
@@ -77,6 +77,32 @@ class TestMCPServer(unittest.TestCase):
         ))
         self.assertAlmostEqual(result["value"], -2.5298221281347035)
         self.assertEqual(result["warnings"], [])
+
+    def test_fisher_exact_matches_lady_tasting_tea_reference_case(self):
+        result, _ = asyncio.run(_call("fisher_exact_test", {"table": [[3, 1], [1, 3]]}))
+        self.assertAlmostEqual(result["p_value"], 0.4857142857142857)
+
+    def test_pearson_correlation_round_trips_correctly(self):
+        result, _ = asyncio.run(_call(
+            "pearson_correlation", {"x": [1, 2, 3, 4, 5], "y": [2, 4, 5, 4, 5]}
+        ))
+        self.assertAlmostEqual(result["statistic"], 0.7745966692414834)
+        self.assertEqual(result["df"], 3)
+
+    def test_simple_linear_regression_round_trips_correctly(self):
+        result, _ = asyncio.run(_call(
+            "simple_linear_regression", {"x": [1, 2, 3, 4, 5], "y": [3, 5, 7, 9, 11]}
+        ))
+        self.assertAlmostEqual(result["slope"], 2.0)
+        self.assertAlmostEqual(result["intercept"], 1.0)
+
+    def test_mann_whitney_u_complete_separation(self):
+        result, _ = asyncio.run(_call("mann_whitney_u", {"a": [1, 2, 3], "b": [4, 5, 6]}))
+        self.assertEqual(result["statistic"], 0.0)
+
+    def test_kruskal_wallis_matches_hand_computed_example(self):
+        result, _ = asyncio.run(_call("kruskal_wallis", {"groups": [[1, 2], [3, 4], [5, 6]]}))
+        self.assertAlmostEqual(result["statistic"], 4.571428571428571, places=6)
 
     def test_cohens_d_zero_variance_edge_case_is_handled_not_crashed(self):
         # Regression test for a real bug found in practice: cohens_d
