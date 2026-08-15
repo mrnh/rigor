@@ -26,16 +26,23 @@ otherwise be importable):
 Each tool below is a thin, mechanical wrapper around an already-tested
 function in rigor.inference / rigor.effect_size / rigor.power /
 rigor.corrections -- deliberately kept with no logic of its own beyond
-converting a dataclass result to a plain dict. Smoke-tested against a
+converting a dataclass result to a plain dict, with two exceptions:
+recommend_test (rigor.advisor) and pairwise_group_comparisons
+(rigor.batch) are themselves orchestration/decision logic rather than
+statistics, so the wrapper is thin but the function underneath isn't --
+see those modules' docstrings for why they're not more of the same
+math-from-scratch-verified-against-an-identity treatment the rest of
+this package gets (there's no statistic to get numerically wrong;
+they compose already-verified tools). Smoke-tested against a
 real MCP client (stdio transport, tool discovery + representative calls
-across all 30 tools; see tests/test_mcp_server.py).
+across all 32 tools; see tests/test_mcp_server.py).
 
 Every tool carries the same ToolAnnotations (_PURE): every one of them
 is a stateless, deterministic calculation over its arguments -- no I/O,
 no external calls, no mutation, calling twice with the same input always
 gives the same answer. read_only_hint/idempotent_hint=True and
 destructive_hint/open_world_hint=False are simply true statements about
-all 30, not a per-tool judgment call.
+all 32, not a per-tool judgment call.
 
 Every parameter also carries an explicit Field(description=...) rather
 than relying on the docstring alone: the MCP SDK does not parse a
@@ -66,7 +73,7 @@ omega_squared, and rank_biserial_correlation are all bounded and always
 finite for valid inputs.
 """
 import math
-from typing import List
+from typing import List, Optional
 
 try:
     from mcp.server import MCPServer
@@ -84,12 +91,12 @@ from typing import Annotated
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from rigor import correlation, corrections, effect_size, inference, nonparametric, power, regression
+from rigor import advisor, batch, correlation, corrections, effect_size, inference, nonparametric, power, regression
 
 mcp = MCPServer("rigor")
 
 # Shared by every tool below -- see the module docstring for why this is
-# a true statement about all 30 rather than a per-tool judgment call.
+# a true statement about all 32 rather than a per-tool judgment call.
 _PURE = ToolAnnotations(
     read_only_hint=True,
     destructive_hint=False,
@@ -126,6 +133,44 @@ def _correction_dict(result: corrections.CorrectionResult) -> dict:
         "reject": result.reject,
         "adjusted_alpha": result.adjusted_alpha,
         "citation": result.citation,
+    }
+
+
+def _recommendation_dict(rec: advisor.TestRecommendation) -> dict:
+    return {
+        "recommended_tool": rec.recommended_tool,
+        "reasoning": rec.reasoning,
+        "alternative_tool": rec.alternative_tool,
+        "alternative_reasoning": rec.alternative_reasoning,
+        "effect_size_tool": rec.effect_size_tool,
+        "power_tool": rec.power_tool,
+        "next_steps": rec.next_steps,
+        "caveats": rec.caveats,
+    }
+
+
+def _pairwise_dict(result: batch.PairwiseComparisonResult) -> dict:
+    return {
+        "test": result.test,
+        "correction_method": result.correction_method,
+        "alpha": result.alpha,
+        "adjusted_alpha": result.adjusted_alpha,
+        "citation": result.citation,
+        "warnings": result.warnings,
+        "comparisons": [
+            {
+                "group_i": c.group_i,
+                "group_j": c.group_j,
+                "label_i": c.label_i,
+                "label_j": c.label_j,
+                "statistic": c.statistic,
+                "p_value": c.p_value,
+                "significant_after_correction": c.p_value_adjusted_significant,
+                "effect_size": c.effect_size,
+                "effect_size_name": c.effect_size_name,
+            }
+            for c in result.comparisons
+        ],
     }
 
 
@@ -596,6 +641,52 @@ def benjamini_hochberg_correction(
     the false discovery rate. Less conservative than Bonferroni; the
     standard choice when testing many hypotheses at once."""
     return _correction_dict(corrections.benjamini_hochberg(p_values, alpha))
+
+
+@mcp.tool(annotations=_PURE)
+def recommend_test(
+    outcome_type: Annotated[str, Field(description='what kind of thing is being compared/measured: "continuous" (means), "proportion" (rates), "count_or_category" (category counts / contingency tables), or "rank_or_ordinal" (ordinal data -- always routed to a rank-based test)')],
+    n_groups: Annotated[int, Field(description="1 = one sample vs. a hypothesized value; 2 = two groups/conditions; 3+ = three or more groups. Ignored when testing_association=true.")] = 2,
+    paired: Annotated[bool, Field(description="for n_groups=2 (continuous/rank_or_ordinal/proportion): were the same subjects measured twice, rather than two independent groups?")] = False,
+    small_or_skewed: Annotated[bool, Field(description="is the sample small, visibly skewed, or outlier-heavy? nudges toward the non-parametric alternative")] = False,
+    two_categorical_variables: Annotated[bool, Field(description='for outcome_type="count_or_category": testing association between two categorical variables (a contingency table) rather than counts against an expected distribution?')] = False,
+    testing_association: Annotated[bool, Field(description='this is "does x relate to/predict y" for two continuous or ranked variables, not a group comparison -- routes to correlation/regression instead')] = False,
+) -> dict:
+    """Not sure which rigor tool fits your question? Answer a few
+    characteristics of the data and get back which tool to call, why,
+    what to call instead if this test's assumptions look shaky, and
+    what to run alongside it (an effect size, a power calculation, a
+    natural follow-up). Every test in this package already documents
+    this guidance in its own docstring for the sibling comparisons it
+    knows about -- this tool exists so you don't have to have already
+    read every other tool's docstring to find the one relevant
+    cross-reference. Pure decision logic, no statistics computed here."""
+    return _recommendation_dict(advisor.recommend_test(
+        outcome_type, n_groups, paired, small_or_skewed, two_categorical_variables, testing_association,
+    ))
+
+
+@mcp.tool(annotations=_PURE)
+def pairwise_group_comparisons(
+    groups: Annotated[List[List[float]], Field(description="one list of observations per group; at least 2 groups")],
+    labels: Annotated[Optional[List[str]], Field(description="optional name per group, same length and order as groups; carried through to each comparison for readability")] = None,
+    test: Annotated[str, Field(description='"t_test" (two_sample_t_test per pair, reports cohens_d) or "mann_whitney" (mann_whitney_u per pair, reports rank_biserial_correlation) -- match whichever you used for the overall group comparison (one_way_anova vs. kruskal_wallis)')] = "t_test",
+    equal_var: Annotated[bool, Field(description='only used when test="t_test": assume equal population variances (pooled) instead of Welch\'s test, same meaning as two_sample_t_test\'s equal_var')] = False,
+    correction: Annotated[str, Field(description='"bh" (Benjamini-Hochberg, less conservative, default), "bonferroni" (more conservative), or "none" (raw p-values, e.g. if correcting elsewhere)')] = "bh",
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """Run every pairwise comparison across 2+ groups and correct for
+    multiple comparisons in one call, instead of orchestrating
+    k*(k-1)/2 separate two_sample_t_test/mann_whitney_u calls plus a
+    separate correction call by hand -- and forgetting the correction
+    is one of the most common real mistakes this package exists to
+    prevent. The natural follow-up after a significant
+    one_way_anova/kruskal_wallis result: pass the same groups here to
+    find *which* group(s) differ, not just whether any do. Returns
+    every pair's statistic, raw p-value, whether it's still significant
+    after correction, and an effect size, plus the correction method's
+    citation and warnings."""
+    return _pairwise_dict(batch.pairwise_group_comparisons(groups, labels, test, equal_var, correction, alpha))
 
 
 def main() -> None:

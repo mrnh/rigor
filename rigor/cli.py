@@ -39,12 +39,15 @@ straight from a checkout without installing):
     rigor power proportion --p1 0.5 --p2 0.4 --power 0.8
     rigor correct bonferroni --p 0.01,0.02,0.03,0.04
     rigor correct bh --p 0.01,0.02,0.03,0.04
+    rigor recommend --outcome-type continuous --n-groups 3
+    rigor recommend --outcome-type continuous --n-groups 2 --paired --small-or-skewed
+    rigor posthoc --groups "1,2,3|4,5,6|7,8,9" --labels A,B,C
 """
 import argparse
 import math
 import sys
 
-from rigor import correlation, corrections, effect_size, inference, nonparametric, power, regression
+from rigor import advisor, batch, correlation, corrections, effect_size, inference, nonparametric, power, regression
 
 
 def _floats(csv: str):
@@ -92,6 +95,38 @@ def _print_regression(result: regression.RegressionResult) -> None:
     print(f"  citation    = {result.citation}")
     for w in result.warnings:
         print(f"  warning     : {w}")
+
+
+def _print_recommendation(rec: advisor.TestRecommendation) -> None:
+    print(f"Recommended tool: {rec.recommended_tool}")
+    print(f"  reasoning = {rec.reasoning}")
+    if rec.alternative_tool:
+        print(f"  alternative: {rec.alternative_tool} -- {rec.alternative_reasoning}")
+    if rec.effect_size_tool:
+        print(f"  effect size: {rec.effect_size_tool}")
+    if rec.power_tool:
+        print(f"  power: {rec.power_tool}")
+    for step in rec.next_steps:
+        print(f"  next step: {step}")
+    for c in rec.caveats:
+        print(f"  caveat: {c}")
+
+
+def _print_pairwise(result: batch.PairwiseComparisonResult) -> None:
+    print(f"Pairwise comparisons ({result.test}, {result.correction_method} correction, alpha={result.alpha})")
+    if result.adjusted_alpha is not None:
+        print(f"  adjusted alpha = {result.adjusted_alpha:.6g}")
+    for c in result.comparisons:
+        i_label = c.label_i if c.label_i is not None else str(c.group_i)
+        j_label = c.label_j if c.label_j is not None else str(c.group_j)
+        es = f", {c.effect_size_name}={c.effect_size:.4g}" if c.effect_size is not None else ""
+        print(
+            f"  {i_label} vs {j_label}: statistic={c.statistic:.6g}  p={c.p_value:.6g}  "
+            f"{'REJECT (significant)' if c.p_value_adjusted_significant else 'fail to reject'}{es}"
+        )
+    print(f"  citation = {result.citation}")
+    for w in result.warnings:
+        print(f"  warning  : {w}")
 
 
 def cmd_ttest(args) -> int:
@@ -235,6 +270,29 @@ def cmd_correct(args) -> int:
     return 0
 
 
+def cmd_recommend(args) -> int:
+    rec = advisor.recommend_test(
+        args.outcome_type,
+        n_groups=args.n_groups,
+        paired=args.paired,
+        small_or_skewed=args.small_or_skewed,
+        two_categorical_variables=args.two_categorical_variables,
+        testing_association=args.testing_association,
+    )
+    _print_recommendation(rec)
+    return 0
+
+
+def cmd_posthoc(args) -> int:
+    groups = [_floats(g) for g in args.groups.split("|")]
+    labels = args.labels.split(",") if args.labels else None
+    result = batch.pairwise_group_comparisons(
+        groups, labels=labels, test=args.test, equal_var=args.equal_var, correction=args.correction, alpha=args.alpha,
+    )
+    _print_pairwise(result)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Classical statistical inference, verified and citable.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -337,6 +395,25 @@ def main(argv=None) -> int:
     p_correct.add_argument("--p", required=True, help="comma-separated p-values")
     p_correct.add_argument("--alpha", type=float, default=0.05)
     p_correct.set_defaults(func=cmd_correct)
+
+    p_recommend = sub.add_parser("recommend", help="which test/tool fits a question -- a decision helper, computes nothing")
+    p_recommend.add_argument("--outcome-type", dest="outcome_type", required=True,
+                              choices=["continuous", "proportion", "count_or_category", "rank_or_ordinal"])
+    p_recommend.add_argument("--n-groups", dest="n_groups", type=int, default=2)
+    p_recommend.add_argument("--paired", action="store_true")
+    p_recommend.add_argument("--small-or-skewed", dest="small_or_skewed", action="store_true")
+    p_recommend.add_argument("--two-categorical-variables", dest="two_categorical_variables", action="store_true")
+    p_recommend.add_argument("--testing-association", dest="testing_association", action="store_true")
+    p_recommend.set_defaults(func=cmd_recommend)
+
+    p_posthoc = sub.add_parser("posthoc", help="pairwise comparisons across 2+ groups, corrected for multiple comparisons")
+    p_posthoc.add_argument("--groups", required=True, help="groups separated by '|', values by ',' e.g. '1,2,3|4,5,6'")
+    p_posthoc.add_argument("--labels", help="comma-separated name per group, same order as --groups")
+    p_posthoc.add_argument("--test", choices=["t_test", "mann_whitney"], default="t_test")
+    p_posthoc.add_argument("--equal-var", dest="equal_var", action="store_true", help="only used with --test t_test: pooled variance instead of Welch's")
+    p_posthoc.add_argument("--correction", choices=["bonferroni", "bh", "none"], default="bh")
+    p_posthoc.add_argument("--alpha", type=float, default=0.05)
+    p_posthoc.set_defaults(func=cmd_posthoc)
 
     args = parser.parse_args(argv)
     return args.func(args)

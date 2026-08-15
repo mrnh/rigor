@@ -10,7 +10,11 @@ training data, not computed and checked. `rigor` is the alternative:
 classical hypothesis testing (parametric and non-parametric),
 correlation and regression, effect sizes, power/sample-size
 calculation, and multiple-comparisons correction, computed from scratch
-and returned as a cited, assumption-checked answer.
+and returned as a cited, assumption-checked answer -- plus a decision
+helper for picking the right tool and a batch tool for running/
+correcting many comparisons at once, since "which test do I even use"
+and "I forgot to correct for multiple comparisons" are their own common
+failure modes, distinct from getting a single formula wrong.
 
 Built as an MCP server: a scan of the current MCP ecosystem (Context7
 for coding docs, several physics/engineering/chemistry/geo servers,
@@ -19,10 +23,11 @@ as one of the few common agent needs nobody had covered yet.
 
 The statistics themselves (`rigor/distributions.py`, `inference.py`,
 `nonparametric.py`, `correlation.py`, `regression.py`,
-`effect_size.py`, `power.py`, `corrections.py`) are pure standard
-library, no dependencies. The package as a whole does depend on the
-official `mcp` SDK, since the MCP server is a first-class part of what
-it ships, not an add-on -- see [Install](#install).
+`effect_size.py`, `power.py`, `corrections.py`, plus the decision/batch
+helpers in `advisor.py` and `batch.py`) are pure standard library, no
+dependencies. The package as a whole does depend on the official `mcp`
+SDK, since the MCP server is a first-class part of what it ships, not
+an add-on -- see [Install](#install).
 
 ## Install
 
@@ -79,10 +84,27 @@ extra.
   d=0.5/α=.05/power=.80 textbook reference case (n≈64).
 - **`rigor/corrections.py`** — Bonferroni and Benjamini-Hochberg (FDR)
   multiple-comparisons correction.
+- **`rigor/advisor.py`** — `recommend_test`: a decision helper, not a
+  statistic. Answer a few characteristics of the data/question
+  (continuous/proportion/categorical/ordinal, how many groups, paired,
+  small-or-skewed, association-not-difference) and get back which tool
+  to call, what to call instead if this test's assumptions look shaky,
+  and what to run alongside it -- compiling the cross-references every
+  other module's docstrings already carry into one callable answer, so
+  an agent doesn't need to have already read all of them to find the
+  relevant one.
+- **`rigor/batch.py`** — `pairwise_group_comparisons`: runs every
+  pairwise comparison across 2+ groups (`two_sample_t_test` or
+  `mann_whitney_u`, your choice) and applies Bonferroni/BH correction
+  to the whole batch in one call, instead of the agent orchestrating
+  k*(k-1)/2 separate calls plus a correction call by hand and risking
+  forgetting the correction step. The natural follow-up
+  `one_way_anova`/`kruskal_wallis` already recommend in their own
+  docstrings once a result comes back significant.
 - **`rigor/cli.py`** — a CLI over all of the above (`rigor.py` at the
   repo root is a thin shim so `python3 rigor.py ...` also works from a
   plain checkout, without installing anything).
-- **`rigor/mcp_server.py`** — an MCP tool wrapper exposing all 30
+- **`rigor/mcp_server.py`** — an MCP tool wrapper exposing all 32
   operations to any MCP client (Claude Code, Claude Desktop, etc.).
   Smoke-tested end-to-end over stdio against a real client — tool
   discovery plus representative calls checked against known reference
@@ -100,8 +122,11 @@ rigor corr pearson --x 1,2,3,4,5 --y 2,4,5,4,5
 rigor regress --x 1,2,3,4,5 --y 3,5,7,9,11
 rigor nonparam mann-whitney --a 1,2,3 --b 4,5,6
 rigor power ttest-2samp --effect-size 0.5 --power 0.8
+rigor recommend --outcome-type continuous --n-groups 3   # which test fits?
+rigor posthoc --groups "1,2,3|4,5,6|7,8,9" --labels A,B,C  # pairwise + correction
 rigor --help   # full list of subcommands (ttest, ztest, chi2, fisher, anova,
-                # levene, nonparam, corr, regress, effect-size, power, correct)
+                # levene, nonparam, corr, regress, effect-size, power, correct,
+                # recommend, posthoc)
 ```
 
 or straight from a checkout without installing anything:
@@ -160,9 +185,9 @@ actually produce a non-finite value.
 python3 -m unittest discover -s tests -v
 ```
 
-121 tests: 111 exercise the statistics directly; 10 spawn `mcp_server.py`
-as a real MCP client would and check results over the wire (skipped
-automatically if `mcp` isn't installed).
+152 tests: 140 exercise the statistics/decision logic directly; 12 spawn
+`mcp_server.py` as a real MCP client would and check results over the
+wire (skipped automatically if `mcp` isn't installed).
 
 ## License
 

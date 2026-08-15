@@ -52,7 +52,7 @@ class TestMCPServer(unittest.TestCase):
         _, names = asyncio.run(_call(
             "one_sample_t_test", {"data": [1, 2, 3, 4, 5], "mu0": 0}
         ))
-        self.assertEqual(len(names), 30)
+        self.assertEqual(len(names), 32)
 
     def test_sample_size_matches_cohen_1988_reference_case(self):
         # d=0.5, alpha=.05, power=.80 -> textbook answer n~=64 per group.
@@ -103,6 +103,21 @@ class TestMCPServer(unittest.TestCase):
     def test_kruskal_wallis_matches_hand_computed_example(self):
         result, _ = asyncio.run(_call("kruskal_wallis", {"groups": [[1, 2], [3, 4], [5, 6]]}))
         self.assertAlmostEqual(result["statistic"], 4.571428571428571, places=6)
+
+    def test_recommend_test_round_trips_correctly(self):
+        result, _ = asyncio.run(_call(
+            "recommend_test", {"outcome_type": "continuous", "n_groups": 2, "small_or_skewed": True}
+        ))
+        self.assertEqual(result["recommended_tool"], "mann_whitney_u")
+
+    def test_pairwise_group_comparisons_covers_every_pair(self):
+        result, _ = asyncio.run(_call(
+            "pairwise_group_comparisons",
+            {"groups": [[1, 2, 3], [2, 3, 4], [5, 6, 7]], "labels": ["A", "B", "C"]},
+        ))
+        self.assertEqual(len(result["comparisons"]), 3)
+        pairs = {(c["group_i"], c["group_j"]) for c in result["comparisons"]}
+        self.assertEqual(pairs, {(0, 1), (0, 2), (1, 2)})
 
     def test_cohens_d_zero_variance_edge_case_is_handled_not_crashed(self):
         # Regression test for a real bug found in practice: cohens_d

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rigor-mcp"
-version = "0.2.0"
-description = "Verified statistical inference for AI agents -- classical and non-parametric hypothesis testing, correlation/regression, effect sizes, power/sample-size, and multiple-comparisons correction, as a CLI and an MCP server"
+version = "0.3.0"
+description = "Verified statistical inference for AI agents -- classical and non-parametric hypothesis testing, correlation/regression, effect sizes, power/sample-size, multiple-comparisons correction, a test-recommendation helper, and a batch pairwise-comparison tool, as a CLI and an MCP server"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Marian Heidtmann" }]
