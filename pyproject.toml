@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rigor-mcp"
+version = "0.1.0"
+description = "Verified statistical inference for AI agents -- classical hypothesis testing, effect sizes, power/sample-size, and multiple-comparisons correction, as a CLI and an MCP server"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "mrnh" }]
+requires-python = ">=3.9"
+dependencies = []
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+keywords = ["mcp", "model-context-protocol", "statistics", "hypothesis-testing", "ai-agents"]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+
+[project.urls]
+Homepage = "https://github.com/mrnh/rigor"
+Repository = "https://github.com/mrnh/rigor"
+Issues = "https://github.com/mrnh/rigor/issues"
+
+[project.scripts]
+rigor = "rigor.cli:main"
+rigor-mcp = "rigor.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = ["rigor*"]

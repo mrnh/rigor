@@ -18,6 +18,17 @@ No dependencies beyond the Python 3 standard library, except for the
 MCP server itself (`rigor/mcp_server.py`), which needs the official
 `mcp` SDK.
 
+## Install
+
+```sh
+pip install rigor-mcp          # CLI only
+pip install "rigor-mcp[mcp]"   # CLI + the MCP server
+```
+
+(the PyPI distribution is `rigor-mcp` since plain `rigor` was already
+taken by an unrelated package; the importable package and the CLI
+command are both still just `rigor`.)
+
 ## What's in it
 
 - **`rigor/distributions.py`** — t, chi-squared, and F distributions
@@ -40,7 +51,9 @@ MCP server itself (`rigor/mcp_server.py`), which needs the official
   (1988) d=0.5/α=.05/power=.80 textbook reference case (n≈64).
 - **`rigor/corrections.py`** — Bonferroni and Benjamini-Hochberg (FDR)
   multiple-comparisons correction.
-- **`rigor.py`** — a CLI over all of the above.
+- **`rigor/cli.py`** — a CLI over all of the above (`rigor.py` at the
+  repo root is a thin shim so `python3 rigor.py ...` also works from a
+  plain checkout, without installing anything).
 - **`rigor/mcp_server.py`** — an MCP tool wrapper exposing all 17
   operations to any MCP client (Claude Code, Claude Desktop, etc.).
   Smoke-tested end-to-end over stdio against a real client — tool
@@ -50,31 +63,40 @@ MCP server itself (`rigor/mcp_server.py`), which needs the official
 
 ## Usage
 
-CLI:
+CLI, once installed:
+
+```sh
+rigor ttest one-sample --data 5.1,4.9,5.3,5.0,4.8,5.2 --mu0 5.0
+rigor power ttest-2samp --effect-size 0.5 --power 0.8
+rigor --help   # full list of subcommands (ttest, ztest, chi2, anova, effect-size, power, correct)
+```
+
+or straight from a checkout without installing anything:
 
 ```sh
 python3 rigor.py ttest one-sample --data 5.1,4.9,5.3,5.0,4.8,5.2 --mu0 5.0
-python3 rigor.py power ttest-2samp --effect-size 0.5 --power 0.8
-python3 rigor.py --help   # full list of subcommands (ttest, ztest, chi2, anova, effect-size, power, correct)
 ```
 
 MCP server, over stdio (the transport local clients like Claude Code
 expect):
 
 ```sh
-pip install mcp
-python3 -m rigor.mcp_server
+pip install "rigor-mcp[mcp]"
+rigor-mcp
 ```
+
+or from a checkout: `pip install mcp && python3 -m rigor.mcp_server`.
 
 Register it with Claude Code:
 
 ```sh
-claude mcp add rigor -- python3 -m rigor.mcp_server
+claude mcp add rigor -- rigor-mcp
 ```
 
-(run from this repo's root, or point at an absolute interpreter/module
-path). For interactive poking with the MCP Inspector, run it as a
-script rather than a module — which means the package root has to be
+(or, from a checkout: `claude mcp add rigor -- python3 -m rigor.mcp_server`,
+run from this repo's root or with an absolute module path). For
+interactive poking with the MCP Inspector, run it as a script rather
+than the installed command — which means the package root has to be
 put on the path by hand, since the Inspector imports the file directly:
 
 ```sh

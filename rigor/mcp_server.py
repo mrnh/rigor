@@ -1,15 +1,17 @@
 """MCP server exposing rigor's statistics as tools for AI agents.
 
-Requires the official MCP Python SDK: ``pip install mcp``. That's the
-one dependency in this project that isn't the standard library --
+Requires the official MCP Python SDK: ``pip install rigor-mcp[mcp]`` (or
+``pip install mcp`` alongside a plain checkout). That's the one
+dependency in this project that isn't the standard library --
 appropriate here, since being an MCP server *is* the point of this
 file, unlike the rest of rigor (distributions/inference/effect_size/
 power/corrections), which stays dependency-free.
 
-Run directly to serve over stdio (the transport local MCP clients like
-Claude Code expect):
+Serves over stdio (the transport local MCP clients like Claude Code
+expect) via, in order of preference:
 
-    python3 -m rigor.mcp_server
+    rigor-mcp                    # console script, once pip-installed
+    python3 -m rigor.mcp_server  # module form, from a checkout
 
 For interactive poking with the MCP Inspector, run it as a script rather
 than a module, which means the package root has to be put on the path
@@ -38,7 +40,13 @@ cramers_v are bounded and always finite for valid inputs.
 import math
 from typing import List
 
-from mcp.server import MCPServer
+try:
+    from mcp.server import MCPServer
+except ImportError as exc:
+    raise ImportError(
+        "rigor's MCP server needs the official MCP Python SDK, which "
+        "isn't installed. Run: pip install rigor-mcp[mcp]"
+    ) from exc
 
 from rigor import corrections, effect_size, inference, power
 
@@ -216,5 +224,11 @@ def benjamini_hochberg_correction(p_values: List[float], alpha: float = 0.05) ->
     return _correction_dict(corrections.benjamini_hochberg(p_values, alpha))
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point for the `rigor-mcp` console script (and `python3 -m
+    rigor.mcp_server`) -- serves over stdio."""
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()
