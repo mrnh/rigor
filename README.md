@@ -16,6 +16,25 @@ correcting many comparisons at once, since "which test do I even use"
 and "I forgot to correct for multiple comparisons" are their own common
 failure modes, distinct from getting a single formula wrong.
 
+**A concrete case where this matters.** The one sample-size number
+everyone half-remembers is Cohen (1988)'s own worked example: d=0.5,
+alpha=.05, power=.80 -> n≈64 per group. It's in every textbook and
+slide deck, so it's also what gets pattern-matched to when a
+*similar*-looking question comes up. Ask instead for d=0.46, power=.85
+-- a modest, realistic revision, not a trick:
+
+```sh
+$ rigor power ttest-2samp --effect-size 0.46 --power 0.85
+Required n per group = 84.86 (round up: 85)
+```
+
+85, not "about 64" -- a third more participants to recruit than the
+half-remembered number suggests, from a question that *looks* like the
+famous one. The formula itself isn't hard (`power.py` runs the same
+bisection search either direction, in a few lines); the failure mode
+is that recalling a nearby-looking answer feels indistinguishable from
+computing the right one, right up until the number's wrong.
+
 Built as an MCP server: a scan of the current MCP ecosystem (Context7
 for coding docs, several physics/engineering/chemistry/geo servers,
 even Bentley's STAAD integration) found statistics/experimental design
@@ -185,9 +204,11 @@ actually produce a non-finite value.
 python3 -m unittest discover -s tests -v
 ```
 
-152 tests: 140 exercise the statistics/decision logic directly; 12 spawn
-`mcp_server.py` as a real MCP client would and check results over the
-wire (skipped automatically if `mcp` isn't installed).
+153 tests: 140 exercise the statistics/decision logic directly; 12
+spawn `mcp_server.py` as a real MCP client would and check results over
+the wire (skipped automatically if `mcp` isn't installed); 1 checks
+that server.json's version hasn't drifted from pyproject.toml's (the
+two aren't otherwise linked -- see test_release_metadata.py).
 
 ## License
 
