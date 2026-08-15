@@ -105,14 +105,25 @@ def two_sample_t_test(a: List[float], b: List[float], equal_var: bool = False, a
 @mcp.tool()
 def paired_t_test(a: List[float], b: List[float], alpha: float = 0.05) -> dict:
     """Test whether the mean difference between paired observations (e.g.
-    before/after on the same subjects) is zero."""
+    before/after measurements on the same subjects, or matched pairs) is
+    zero. a and b must be the same length, with a[i] and b[i] the two
+    measurements of the same pair -- use two_sample_t_test instead if the
+    two samples are independent (different subjects in each group).
+    Returns the t-statistic, degrees of freedom (n-1), two-tailed
+    p-value, a confidence interval for the mean difference, a citation,
+    and assumption warnings."""
     return _result_dict(inference.paired_t_test(a, b), alpha)
 
 
 @mcp.tool()
 def one_proportion_z_test(successes: int, n: int, p0: float, alpha: float = 0.05) -> dict:
     """Test whether an observed proportion (successes out of n) differs
-    from a hypothesized proportion p0."""
+    from a hypothesized proportion p0 -- e.g. "is this coin fair (p0=0.5)
+    given 55 heads in 100 flips?" Uses the normal approximation, which
+    degrades for small n or p0 near 0 or 1; a warning is included when
+    that assumption looks shaky. Returns the z-statistic, two-tailed
+    p-value, a confidence interval for the true proportion, a citation,
+    and warnings."""
     return _result_dict(inference.one_proportion_z_test(successes, n, p0), alpha)
 
 
@@ -125,31 +136,56 @@ def two_proportion_z_test(successes1: int, n1: int, successes2: int, n2: int, al
 
 @mcp.tool()
 def chi_square_goodness_of_fit(observed: List[float], expected: List[float], alpha: float = 0.05) -> dict:
-    """Test whether observed category counts match an expected distribution."""
+    """Test whether observed category counts match an expected
+    distribution -- e.g. "are these six days-of-week signup counts
+    evenly distributed, or skewed towards weekends?" observed and
+    expected must be the same length and in the same category order;
+    expected does not need to sum to the same total as observed (only
+    relative proportions matter). Returns the chi-squared statistic,
+    degrees of freedom (len-1), p-value, a citation, and a warning if
+    any expected count is below 5 (the usual threshold below which this
+    approximation gets unreliable)."""
     return _result_dict(inference.chi_square_goodness_of_fit(observed, expected), alpha)
 
 
 @mcp.tool()
 def chi_square_independence(table: List[List[float]], alpha: float = 0.05) -> dict:
     """Test whether the row and column variables of a contingency table
-    are independent (e.g. "does group membership relate to outcome")."""
+    are independent (e.g. "does group membership relate to outcome?").
+    table is a list of rows, each a list of raw counts, not
+    proportions -- e.g. [[treated_success, treated_failure],
+    [control_success, control_failure]] for a 2x2 table. Returns the
+    chi-squared statistic, degrees of freedom, p-value, a citation, and
+    a warning if any expected cell count is below 5 (consider
+    cramers_v afterwards for effect size)."""
     return _result_dict(inference.chi_square_independence(table), alpha)
 
 
 @mcp.tool()
 def one_way_anova(groups: List[List[float]], alpha: float = 0.05) -> dict:
-    """Test whether three or more independent groups have different means."""
+    """Test whether three or more independent groups have different
+    means -- e.g. comparing average order value across three marketing
+    channels. groups is a list of samples, one list of numbers per
+    group (at least 3 groups, each with at least 2 observations). A
+    significant result means at least one group differs from the
+    others, not which one -- follow up with pairwise two_sample_t_test
+    calls (correcting for multiple comparisons via bonferroni_correction
+    or benjamini_hochberg_correction) to find which. Returns the
+    F-statistic, between/within degrees of freedom, p-value, a
+    citation, and a warning if within-group df is small."""
     return _result_dict(inference.one_way_anova(*groups), alpha)
 
 
 @mcp.tool()
 def cohens_d(a: List[float], b: List[float]) -> dict:
     """Standardized mean difference between two samples (pooled SD).
-    Rough guidance: ~0.2 small, ~0.5 medium, ~0.8 large -- context-dependent.
-    Returns {"value": float or null, "warnings": [...]}. value is null
-    only when both samples have zero variance and unequal means, where
-    the effect size is mathematically infinite -- see the warning for
-    which direction and use the raw mean difference instead."""
+    Use alongside two_sample_t_test, which tells you whether a
+    difference is significant but not how large it is. Rough guidance:
+    ~0.2 small, ~0.5 medium, ~0.8 large -- context-dependent. Returns
+    {"value": float or null, "warnings": [...]}. value is null only
+    when both samples have zero variance and unequal means, where the
+    effect size is mathematically infinite -- see the warning for which
+    direction, and report the raw mean difference instead in that case."""
     d = effect_size.cohens_d(a, b)
     if math.isfinite(d):
         return {"value": d, "warnings": []}
@@ -167,13 +203,27 @@ def cohens_d(a: List[float], b: List[float]) -> dict:
 
 @mcp.tool()
 def cohens_h(p1: float, p2: float) -> float:
-    """Effect size for a difference between two proportions (arcsine transform)."""
+    """Effect size for a difference between two proportions (Cohen,
+    1988), via the arcsine-square-root transform -- more appropriate
+    than a raw percentage-point difference since it stabilizes variance
+    across the full [0, 1] range. p1 and p2 are interchangeable (the
+    sign of the result just indicates direction); use alongside
+    two_proportion_z_test, which tells you whether a difference is
+    significant but not how large it is. Returns a float (can be
+    negative); rough guidance: ~0.2 small, ~0.5 medium, ~0.8 large."""
     return effect_size.cohens_h(p1, p2)
 
 
 @mcp.tool()
 def cramers_v(chi2_statistic: float, n: int, rows: int, cols: int) -> float:
-    """Effect size for a chi-squared test of independence, normalized to [0, 1]."""
+    """Effect size for a chi-squared test of independence (Cramer, 1946),
+    normalized to [0, 1] regardless of table shape so it's comparable
+    across tables of different sizes, unlike the raw chi-squared
+    statistic. Call after chi_square_independence, passing its
+    statistic along with n (total observations) and the row/column
+    counts of the same table. Returns a float in [0, 1]; rough guidance
+    for a 2x2 table: ~0.1 small, ~0.3 medium, ~0.5 large -- the
+    threshold shifts for larger tables."""
     return effect_size.cramers_v(chi2_statistic, n, rows, cols)
 
 
@@ -192,8 +242,14 @@ def sample_size_for_two_sample_t_test(
 def power_for_two_sample_t_test(
     n_per_group: float, effect_size_d: float, alpha: float = 0.05
 ) -> float:
-    """Statistical power to detect a given Cohen's d with n observations
-    per group, using a two-sample t-test."""
+    """Statistical power to detect a given Cohen's d with n_per_group
+    observations per group, using a two-sample t-test. Power is the
+    probability of correctly detecting a real effect of this size at
+    the given alpha (0.8 is the conventional target); a design with low
+    power means a non-significant result would be inconclusive rather
+    than good evidence the effect doesn't exist. Use
+    sample_size_for_two_sample_t_test instead to solve for n given a
+    target power. Returns a float in [alpha, 1]."""
     return power.power_two_sample_t_test(n_per_group, effect_size_d, alpha)
 
 
@@ -210,7 +266,13 @@ def sample_size_for_two_proportion_test(
 @mcp.tool()
 def power_for_two_proportion_test(n_per_group: float, p1: float, p2: float, alpha: float = 0.05) -> float:
     """Statistical power to detect a difference between two proportions
-    with n observations per group."""
+    (e.g. two conversion rates) with n_per_group observations in each
+    group, using a two-proportion z-test. p1 and p2 are interchangeable
+    (only their difference matters) -- e.g. current vs. new conversion
+    rate. Power is the probability of correctly detecting a real
+    difference of this size at the given alpha; use
+    sample_size_for_two_proportion_test instead to solve for n given a
+    target power. Returns a float in [alpha, 1]."""
     return power.power_two_proportion_z_test(n_per_group, p1, p2, alpha)
 
 
