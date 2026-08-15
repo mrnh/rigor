@@ -30,6 +30,23 @@ converting a dataclass result to a plain dict. Smoke-tested against a
 real MCP client (stdio transport, tool discovery + representative calls
 across all 17 tools; see tests/test_mcp_server.py).
 
+Every tool carries the same ToolAnnotations (_PURE): every one of them
+is a stateless, deterministic calculation over its arguments -- no I/O,
+no external calls, no mutation, calling twice with the same input always
+gives the same answer. read_only_hint/idempotent_hint=True and
+destructive_hint/open_world_hint=False are simply true statements about
+all 17, not a per-tool judgment call.
+
+Every parameter also carries an explicit Field(description=...) rather
+than relying on the docstring alone: the MCP SDK does not parse a
+docstring's Args section into the generated JSON schema (checked
+empirically -- a Google-style Args block produces no per-parameter
+schema description), but Annotated[T, Field(description=...)] does. The
+prose docstrings therefore focus on purpose, usage guidance (when to
+reach for this tool over a sibling), and what comes back; parameter-by-
+parameter meaning lives in the schema instead of being duplicated in
+both places.
+
 One deliberate exception to "no logic of its own": cohens_d returns a
 dict rather than a bare float, because rigor.effect_size.cohens_d
 correctly returns +-inf for zero-variance samples, but MCP's structured
@@ -54,9 +71,27 @@ except ImportError as exc:
         "isn't installed. Run: pip install mcp"
     ) from exc
 
+from typing import Annotated
+
+from mcp.types import ToolAnnotations
+from pydantic import Field
+
 from rigor import corrections, effect_size, inference, power
 
 mcp = MCPServer("rigor")
+
+# Shared by every tool below -- see the module docstring for why this is
+# a true statement about all 17 rather than a per-tool judgment call.
+_PURE = ToolAnnotations(
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
+)
+
+_Alpha = Annotated[float, Field(description="significance level for the test (and any confidence interval); default 0.05")]
+_TargetPower = Annotated[float, Field(description="desired probability of detecting the effect if it's real; 0.8 is the conventional target")]
+_Proportion = Annotated[float, Field(description="a proportion in [0, 1]")]
 
 
 def _result_dict(result: inference.TestResult, alpha: float = 0.05) -> dict:
@@ -86,37 +121,54 @@ def _correction_dict(result: corrections.CorrectionResult) -> dict:
     }
 
 
-@mcp.tool()
-def one_sample_t_test(data: List[float], mu0: float, alpha: float = 0.05) -> dict:
+@mcp.tool(annotations=_PURE)
+def one_sample_t_test(
+    data: Annotated[List[float], Field(description="the sample; one number per observation")],
+    mu0: Annotated[float, Field(description="the hypothesized population mean to test the sample against")],
+    alpha: _Alpha = 0.05,
+) -> dict:
     """Test whether a sample's mean differs from a hypothesized value mu0.
     Returns the t-statistic, degrees of freedom, two-tailed p-value, a
     confidence interval for the mean, and any assumption warnings."""
     return _result_dict(inference.one_sample_t_test(data, mu0), alpha)
 
 
-@mcp.tool()
-def two_sample_t_test(a: List[float], b: List[float], equal_var: bool = False, alpha: float = 0.05) -> dict:
+@mcp.tool(annotations=_PURE)
+def two_sample_t_test(
+    a: Annotated[List[float], Field(description="first independent sample")],
+    b: Annotated[List[float], Field(description="second independent sample")],
+    equal_var: Annotated[bool, Field(description="assume equal population variances (classic pooled-variance test) instead of Welch's test")] = False,
+    alpha: _Alpha = 0.05,
+) -> dict:
     """Test whether two independent samples have different means. Defaults
     to Welch's t-test (does not assume equal variances); pass
     equal_var=true for the classic pooled-variance test."""
     return _result_dict(inference.two_sample_t_test(a, b, equal_var=equal_var), alpha)
 
 
-@mcp.tool()
-def paired_t_test(a: List[float], b: List[float], alpha: float = 0.05) -> dict:
+@mcp.tool(annotations=_PURE)
+def paired_t_test(
+    a: Annotated[List[float], Field(description="first measurement of each pair, e.g. 'before'")],
+    b: Annotated[List[float], Field(description="second measurement of each pair, e.g. 'after' -- same length and pairing order as a")],
+    alpha: _Alpha = 0.05,
+) -> dict:
     """Test whether the mean difference between paired observations (e.g.
     before/after measurements on the same subjects, or matched pairs) is
-    zero. a and b must be the same length, with a[i] and b[i] the two
-    measurements of the same pair -- use two_sample_t_test instead if the
-    two samples are independent (different subjects in each group).
-    Returns the t-statistic, degrees of freedom (n-1), two-tailed
-    p-value, a confidence interval for the mean difference, a citation,
-    and assumption warnings."""
+    zero. a[i] and b[i] must be the two measurements of the same pair --
+    use two_sample_t_test instead if the two samples are independent
+    (different subjects in each group). Returns the t-statistic, degrees
+    of freedom (n-1), two-tailed p-value, a confidence interval for the
+    mean difference, a citation, and assumption warnings."""
     return _result_dict(inference.paired_t_test(a, b), alpha)
 
 
-@mcp.tool()
-def one_proportion_z_test(successes: int, n: int, p0: float, alpha: float = 0.05) -> dict:
+@mcp.tool(annotations=_PURE)
+def one_proportion_z_test(
+    successes: Annotated[int, Field(description="number of successes observed")],
+    n: Annotated[int, Field(description="total number of trials/observations")],
+    p0: Annotated[float, Field(description="the hypothesized true proportion to test against, in [0, 1]")],
+    alpha: _Alpha = 0.05,
+) -> dict:
     """Test whether an observed proportion (successes out of n) differs
     from a hypothesized proportion p0 -- e.g. "is this coin fair (p0=0.5)
     given 55 heads in 100 flips?" Uses the normal approximation, which
@@ -127,57 +179,71 @@ def one_proportion_z_test(successes: int, n: int, p0: float, alpha: float = 0.05
     return _result_dict(inference.one_proportion_z_test(successes, n, p0), alpha)
 
 
-@mcp.tool()
-def two_proportion_z_test(successes1: int, n1: int, successes2: int, n2: int, alpha: float = 0.05) -> dict:
+@mcp.tool(annotations=_PURE)
+def two_proportion_z_test(
+    successes1: Annotated[int, Field(description="successes observed in group 1")],
+    n1: Annotated[int, Field(description="total observations in group 1")],
+    successes2: Annotated[int, Field(description="successes observed in group 2")],
+    n2: Annotated[int, Field(description="total observations in group 2")],
+    alpha: _Alpha = 0.05,
+) -> dict:
     """Test whether two independent proportions differ -- the standard test
-    behind comparing conversion rates between two groups (e.g. an A/B test)."""
+    behind comparing conversion rates between two groups (e.g. an A/B
+    test). Returns the z-statistic, two-tailed p-value, a confidence
+    interval for the difference in proportions, a citation, and
+    warnings."""
     return _result_dict(inference.two_proportion_z_test(successes1, n1, successes2, n2), alpha)
 
 
-@mcp.tool()
-def chi_square_goodness_of_fit(observed: List[float], expected: List[float], alpha: float = 0.05) -> dict:
+@mcp.tool(annotations=_PURE)
+def chi_square_goodness_of_fit(
+    observed: Annotated[List[float], Field(description="observed count per category")],
+    expected: Annotated[List[float], Field(description="expected count per category, same length and category order as observed; does not need to sum to the same total")],
+    alpha: _Alpha = 0.05,
+) -> dict:
     """Test whether observed category counts match an expected
     distribution -- e.g. "are these six days-of-week signup counts
-    evenly distributed, or skewed towards weekends?" observed and
-    expected must be the same length and in the same category order;
-    expected does not need to sum to the same total as observed (only
-    relative proportions matter). Returns the chi-squared statistic,
-    degrees of freedom (len-1), p-value, a citation, and a warning if
-    any expected count is below 5 (the usual threshold below which this
-    approximation gets unreliable)."""
+    evenly distributed, or skewed towards weekends?" Returns the
+    chi-squared statistic, degrees of freedom (len-1), p-value, a
+    citation, and a warning if any expected count is below 5 (the usual
+    threshold below which this approximation gets unreliable)."""
     return _result_dict(inference.chi_square_goodness_of_fit(observed, expected), alpha)
 
 
-@mcp.tool()
-def chi_square_independence(table: List[List[float]], alpha: float = 0.05) -> dict:
+@mcp.tool(annotations=_PURE)
+def chi_square_independence(
+    table: Annotated[List[List[float]], Field(description="contingency table as a list of rows, each a list of raw counts (not proportions), e.g. [[treated_success, treated_failure], [control_success, control_failure]] for a 2x2 table")],
+    alpha: _Alpha = 0.05,
+) -> dict:
     """Test whether the row and column variables of a contingency table
     are independent (e.g. "does group membership relate to outcome?").
-    table is a list of rows, each a list of raw counts, not
-    proportions -- e.g. [[treated_success, treated_failure],
-    [control_success, control_failure]] for a 2x2 table. Returns the
-    chi-squared statistic, degrees of freedom, p-value, a citation, and
-    a warning if any expected cell count is below 5 (consider
-    cramers_v afterwards for effect size)."""
+    Returns the chi-squared statistic, degrees of freedom, p-value, a
+    citation, and a warning if any expected cell count is below 5
+    (consider cramers_v afterwards for effect size)."""
     return _result_dict(inference.chi_square_independence(table), alpha)
 
 
-@mcp.tool()
-def one_way_anova(groups: List[List[float]], alpha: float = 0.05) -> dict:
+@mcp.tool(annotations=_PURE)
+def one_way_anova(
+    groups: Annotated[List[List[float]], Field(description="one list of observations per group; at least 3 groups, each with at least 2 observations")],
+    alpha: _Alpha = 0.05,
+) -> dict:
     """Test whether three or more independent groups have different
     means -- e.g. comparing average order value across three marketing
-    channels. groups is a list of samples, one list of numbers per
-    group (at least 3 groups, each with at least 2 observations). A
-    significant result means at least one group differs from the
-    others, not which one -- follow up with pairwise two_sample_t_test
-    calls (correcting for multiple comparisons via bonferroni_correction
-    or benjamini_hochberg_correction) to find which. Returns the
-    F-statistic, between/within degrees of freedom, p-value, a
-    citation, and a warning if within-group df is small."""
+    channels. A significant result means at least one group differs from
+    the others, not which one -- follow up with pairwise
+    two_sample_t_test calls (correcting for multiple comparisons via
+    bonferroni_correction or benjamini_hochberg_correction) to find
+    which. Returns the F-statistic, between/within degrees of freedom,
+    p-value, a citation, and a warning if within-group df is small."""
     return _result_dict(inference.one_way_anova(*groups), alpha)
 
 
-@mcp.tool()
-def cohens_d(a: List[float], b: List[float]) -> dict:
+@mcp.tool(annotations=_PURE)
+def cohens_d(
+    a: Annotated[List[float], Field(description="first sample")],
+    b: Annotated[List[float], Field(description="second sample")],
+) -> dict:
     """Standardized mean difference between two samples (pooled SD).
     Use alongside two_sample_t_test, which tells you whether a
     difference is significant but not how large it is. Rough guidance:
@@ -201,8 +267,8 @@ def cohens_d(a: List[float], b: List[float]) -> dict:
     }
 
 
-@mcp.tool()
-def cohens_h(p1: float, p2: float) -> float:
+@mcp.tool(annotations=_PURE)
+def cohens_h(p1: _Proportion, p2: _Proportion) -> float:
     """Effect size for a difference between two proportions (Cohen,
     1988), via the arcsine-square-root transform -- more appropriate
     than a raw percentage-point difference since it stabilizes variance
@@ -214,22 +280,28 @@ def cohens_h(p1: float, p2: float) -> float:
     return effect_size.cohens_h(p1, p2)
 
 
-@mcp.tool()
-def cramers_v(chi2_statistic: float, n: int, rows: int, cols: int) -> float:
+@mcp.tool(annotations=_PURE)
+def cramers_v(
+    chi2_statistic: Annotated[float, Field(description="the chi-squared statistic from chi_square_independence on the same table")],
+    n: Annotated[int, Field(description="total number of observations in the table")],
+    rows: Annotated[int, Field(description="number of rows in the table")],
+    cols: Annotated[int, Field(description="number of columns in the table")],
+) -> float:
     """Effect size for a chi-squared test of independence (Cramer, 1946),
     normalized to [0, 1] regardless of table shape so it's comparable
     across tables of different sizes, unlike the raw chi-squared
     statistic. Call after chi_square_independence, passing its
-    statistic along with n (total observations) and the row/column
-    counts of the same table. Returns a float in [0, 1]; rough guidance
-    for a 2x2 table: ~0.1 small, ~0.3 medium, ~0.5 large -- the
-    threshold shifts for larger tables."""
+    statistic and the same table's n/rows/cols. Returns a float in
+    [0, 1]; rough guidance for a 2x2 table: ~0.1 small, ~0.3 medium,
+    ~0.5 large -- the threshold shifts for larger tables."""
     return effect_size.cramers_v(chi2_statistic, n, rows, cols)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_PURE)
 def sample_size_for_two_sample_t_test(
-    effect_size_d: float, alpha: float = 0.05, target_power: float = 0.8
+    effect_size_d: Annotated[float, Field(description="the Cohen's d you want to be able to detect")],
+    alpha: _Alpha = 0.05,
+    target_power: _TargetPower = 0.8,
 ) -> dict:
     """How many observations per group are needed to detect a given
     Cohen's d with a two-sample t-test at the target power. Returns a
@@ -238,54 +310,68 @@ def sample_size_for_two_sample_t_test(
     return {"n_per_group_exact": n, "n_per_group_rounded_up": math.ceil(n)}
 
 
-@mcp.tool()
+@mcp.tool(annotations=_PURE)
 def power_for_two_sample_t_test(
-    n_per_group: float, effect_size_d: float, alpha: float = 0.05
+    n_per_group: Annotated[float, Field(description="planned (or actual) observations per group")],
+    effect_size_d: Annotated[float, Field(description="the Cohen's d you want to be able to detect")],
+    alpha: _Alpha = 0.05,
 ) -> float:
     """Statistical power to detect a given Cohen's d with n_per_group
     observations per group, using a two-sample t-test. Power is the
     probability of correctly detecting a real effect of this size at
-    the given alpha (0.8 is the conventional target); a design with low
-    power means a non-significant result would be inconclusive rather
-    than good evidence the effect doesn't exist. Use
-    sample_size_for_two_sample_t_test instead to solve for n given a
-    target power. Returns a float in [alpha, 1]."""
+    the given alpha; a design with low power means a non-significant
+    result would be inconclusive rather than good evidence the effect
+    doesn't exist. Use sample_size_for_two_sample_t_test instead to
+    solve for n given a target power. Returns a float in [alpha, 1]."""
     return power.power_two_sample_t_test(n_per_group, effect_size_d, alpha)
 
 
-@mcp.tool()
+@mcp.tool(annotations=_PURE)
 def sample_size_for_two_proportion_test(
-    p1: float, p2: float, alpha: float = 0.05, target_power: float = 0.8
+    p1: _Proportion,
+    p2: _Proportion,
+    alpha: _Alpha = 0.05,
+    target_power: _TargetPower = 0.8,
 ) -> dict:
     """How many observations per group are needed to detect a difference
-    between two proportions (e.g. conversion rates) at the target power."""
+    between two proportions (e.g. conversion rates) at the target power.
+    p1 and p2 are interchangeable -- only their difference matters."""
     n = power.sample_size_two_proportion_z_test(p1, p2, alpha, target_power)
     return {"n_per_group_exact": n, "n_per_group_rounded_up": math.ceil(n)}
 
 
-@mcp.tool()
-def power_for_two_proportion_test(n_per_group: float, p1: float, p2: float, alpha: float = 0.05) -> float:
+@mcp.tool(annotations=_PURE)
+def power_for_two_proportion_test(
+    n_per_group: Annotated[float, Field(description="planned (or actual) observations per group")],
+    p1: _Proportion,
+    p2: _Proportion,
+    alpha: _Alpha = 0.05,
+) -> float:
     """Statistical power to detect a difference between two proportions
     (e.g. two conversion rates) with n_per_group observations in each
     group, using a two-proportion z-test. p1 and p2 are interchangeable
     (only their difference matters) -- e.g. current vs. new conversion
-    rate. Power is the probability of correctly detecting a real
-    difference of this size at the given alpha; use
-    sample_size_for_two_proportion_test instead to solve for n given a
-    target power. Returns a float in [alpha, 1]."""
+    rate. Use sample_size_for_two_proportion_test instead to solve for n
+    given a target power. Returns a float in [alpha, 1]."""
     return power.power_two_proportion_z_test(n_per_group, p1, p2, alpha)
 
 
-@mcp.tool()
-def bonferroni_correction(p_values: List[float], alpha: float = 0.05) -> dict:
+@mcp.tool(annotations=_PURE)
+def bonferroni_correction(
+    p_values: Annotated[List[float], Field(description="the batch of p-values to adjust")],
+    alpha: Annotated[float, Field(description="family-wise significance level to control; default 0.05")] = 0.05,
+) -> dict:
     """Adjust a batch of p-values for multiple comparisons, controlling
     the family-wise error rate. Conservative; use when any false positive
     among the batch is costly."""
     return _correction_dict(corrections.bonferroni(p_values, alpha))
 
 
-@mcp.tool()
-def benjamini_hochberg_correction(p_values: List[float], alpha: float = 0.05) -> dict:
+@mcp.tool(annotations=_PURE)
+def benjamini_hochberg_correction(
+    p_values: Annotated[List[float], Field(description="the batch of p-values to adjust")],
+    alpha: Annotated[float, Field(description="false discovery rate to control; default 0.05")] = 0.05,
+) -> dict:
     """Adjust a batch of p-values for multiple comparisons, controlling
     the false discovery rate. Less conservative than Bonferroni; the
     standard choice when testing many hypotheses at once."""
