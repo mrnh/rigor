@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rigor-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Verified statistical inference for AI agents -- classical hypothesis testing, effect sizes, power/sample-size, and multiple-comparisons correction, as a CLI and an MCP server"
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Marian Heidtmann" }]
 requires-python = ">=3.9"
-dependencies = []
+# mcp is a required dependency (not the rest of rigor's stdlib-only
+# statistics) so that `pip install rigor-mcp` / `uvx rigor-mcp` always
+# works, with no extras syntax for MCP clients/registries to get wrong.
+dependencies = ["mcp>=1.0"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -22,9 +25,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
 ]
 keywords = ["mcp", "model-context-protocol", "statistics", "hypothesis-testing", "ai-agents"]
-
-[project.optional-dependencies]
-mcp = ["mcp>=1.0"]
 
 [project.urls]
 Homepage = "https://github.com/mrnh/rigor"

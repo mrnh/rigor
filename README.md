@@ -1,5 +1,7 @@
 # rigor
 
+<!-- mcp-name: io.github.mrnh/rigor-mcp -->
+
 Verified statistical inference for AI agents.
 
 LLMs are decent at reciting statistics but bad at *doing* it reliably —
@@ -14,20 +16,25 @@ for coding docs, several physics/engineering/chemistry/geo servers,
 even Bentley's STAAD integration) found statistics/experimental design
 as one of the few common agent needs nobody had covered yet.
 
-No dependencies beyond the Python 3 standard library, except for the
-MCP server itself (`rigor/mcp_server.py`), which needs the official
-`mcp` SDK.
+The statistics themselves (`rigor/distributions.py`, `inference.py`,
+`effect_size.py`, `power.py`, `corrections.py`) are pure standard
+library, no dependencies. The package as a whole does depend on the
+official `mcp` SDK, since the MCP server is a first-class part of what
+it ships, not an add-on -- see [Install](#install).
 
 ## Install
 
 ```sh
-pip install rigor-mcp          # CLI only
-pip install "rigor-mcp[mcp]"   # CLI + the MCP server
+pip install rigor-mcp
 ```
 
 (the PyPI distribution is `rigor-mcp` since plain `rigor` was already
 taken by an unrelated package; the importable package and the CLI
-command are both still just `rigor`.)
+command are both still just `rigor`.) This gets you both console
+commands, `rigor` (CLI) and `rigor-mcp` (MCP server) -- deliberately
+one install, no extras to get right, since `uvx rigor-mcp` (how most
+MCP clients would actually invoke this) has no way to request an
+extra.
 
 ## What's in it
 
@@ -81,7 +88,7 @@ MCP server, over stdio (the transport local clients like Claude Code
 expect):
 
 ```sh
-pip install "rigor-mcp[mcp]"
+pip install rigor-mcp
 rigor-mcp
 ```
 

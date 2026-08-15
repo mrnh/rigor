@@ -1,11 +1,14 @@
 """MCP server exposing rigor's statistics as tools for AI agents.
 
-Requires the official MCP Python SDK: ``pip install rigor-mcp[mcp]`` (or
-``pip install mcp`` alongside a plain checkout). That's the one
-dependency in this project that isn't the standard library --
-appropriate here, since being an MCP server *is* the point of this
-file, unlike the rest of rigor (distributions/inference/effect_size/
-power/corrections), which stays dependency-free.
+Requires the official MCP Python SDK: bundled automatically by
+``pip install rigor-mcp`` (or ``pip install mcp`` alongside a plain
+checkout). That's the one dependency in this project that isn't the
+standard library -- appropriate here, since being an MCP server *is*
+the point of this file, unlike the rest of rigor (distributions/
+inference/effect_size/power/corrections), which stays dependency-free.
+It's a required dependency of the distribution rather than an optional
+extra deliberately: `uvx rigor-mcp`, the way most MCP clients actually
+invoke this, has no way to request an extra.
 
 Serves over stdio (the transport local MCP clients like Claude Code
 expect) via, in order of preference:
@@ -43,9 +46,12 @@ from typing import List
 try:
     from mcp.server import MCPServer
 except ImportError as exc:
+    # Shouldn't happen via a normal `pip install rigor-mcp` (mcp is a
+    # required dependency) -- this is a fallback for a plain checkout
+    # that never had mcp installed at all.
     raise ImportError(
         "rigor's MCP server needs the official MCP Python SDK, which "
-        "isn't installed. Run: pip install rigor-mcp[mcp]"
+        "isn't installed. Run: pip install mcp"
     ) from exc
 
 from rigor import corrections, effect_size, inference, power
