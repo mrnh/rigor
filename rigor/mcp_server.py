@@ -23,11 +23,17 @@ function in rigor.inference / rigor.effect_size / rigor.power /
 rigor.corrections -- deliberately kept with no logic of its own beyond
 converting a dataclass result to a plain dict. Smoke-tested against a
 real MCP client (stdio transport, tool discovery + representative calls
-across all 17 tools); see JOURNAL.md. One known edge case: cohens_d
-returns +-inf for zero-variance samples (correct per its own contract),
-but non-finite floats serialize to JSON null over MCP's structured
-content, which then fails the tool's own number-typed output schema --
-degenerate input, not fixed here.
+across all 17 tools; see tests/test_mcp_server.py).
+
+One deliberate exception to "no logic of its own": cohens_d returns a
+dict rather than a bare float, because rigor.effect_size.cohens_d
+correctly returns +-inf for zero-variance samples, but MCP's structured
+content serializes non-finite floats to JSON null, which fails a bare
+number-typed output schema. The wrapper catches that case and reports
+it as an explicit null value plus a warning instead of letting the call
+fail. Every non-finite-capable tool needs this same treatment; cohens_d
+is the only one exposed here that can produce one -- cohens_h and
+cramers_v are bounded and always finite for valid inputs.
 """
 import math
 from typing import List
@@ -123,10 +129,26 @@ def one_way_anova(groups: List[List[float]], alpha: float = 0.05) -> dict:
 
 
 @mcp.tool()
-def cohens_d(a: List[float], b: List[float]) -> float:
+def cohens_d(a: List[float], b: List[float]) -> dict:
     """Standardized mean difference between two samples (pooled SD).
-    Rough guidance: ~0.2 small, ~0.5 medium, ~0.8 large -- context-dependent."""
-    return effect_size.cohens_d(a, b)
+    Rough guidance: ~0.2 small, ~0.5 medium, ~0.8 large -- context-dependent.
+    Returns {"value": float or null, "warnings": [...]}. value is null
+    only when both samples have zero variance and unequal means, where
+    the effect size is mathematically infinite -- see the warning for
+    which direction and use the raw mean difference instead."""
+    d = effect_size.cohens_d(a, b)
+    if math.isfinite(d):
+        return {"value": d, "warnings": []}
+    direction = "higher" if d > 0 else "lower"
+    return {
+        "value": None,
+        "warnings": [
+            f"Both samples have zero variance, and sample a's mean is "
+            f"{direction} than sample b's, so the standardized effect "
+            "size is mathematically infinite (pooled SD is 0). Report "
+            "the raw mean difference instead of a standardized d here."
+        ],
+    }
 
 
 @mcp.tool()

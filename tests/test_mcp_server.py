@@ -1,7 +1,9 @@
 """End-to-end check that rigor/mcp_server.py actually works against a real
-MCP client over stdio -- not just that it imports cleanly. Regression test
-for a real bug found in practice: the MCP SDK renamed FastMCP mid-flight,
-so an import that type-checked fine still broke at runtime.
+MCP client over stdio -- not just that it imports cleanly. Regression
+tests for two real bugs found in practice: the MCP SDK renamed FastMCP
+mid-flight (an import that type-checked fine still broke at runtime),
+and cohens_d's correct +-inf return crashing the transport instead of
+being reported.
 
 Skipped if the optional `mcp` package isn't installed (it's the one
 dependency in this project that isn't the standard library -- see
@@ -69,15 +71,26 @@ class TestMCPServer(unittest.TestCase):
         self.assertEqual(result["df2"], 6)
         self.assertTrue(result["reject_null"])
 
-    def test_cohens_d_zero_variance_edge_case_fails_at_the_transport(self):
-        # Documented, known limitation: cohens_d correctly returns +-inf for
-        # zero-variance samples, but MCP's structured content serializes
-        # non-finite floats to JSON null, which then fails the tool's own
-        # number-typed output schema. This test pins that behavior down so
-        # a future SDK upgrade that silently "fixes" or changes it gets
-        # noticed rather than passing quietly.
-        with self.assertRaises(Exception):
-            asyncio.run(_call("cohens_d", {"a": [0, 0, 0, 0], "b": [1, 1, 1, 1]}))
+    def test_cohens_d_normal_case_returns_finite_value_and_no_warnings(self):
+        result, _ = asyncio.run(_call(
+            "cohens_d", {"a": [10, 12, 11, 13, 9], "b": [15, 14, 16, 13, 17]}
+        ))
+        self.assertAlmostEqual(result["value"], -2.5298221281347035)
+        self.assertEqual(result["warnings"], [])
+
+    def test_cohens_d_zero_variance_edge_case_is_handled_not_crashed(self):
+        # Regression test for a real bug found in practice: cohens_d
+        # correctly returns +-inf for zero-variance samples, but MCP's
+        # structured content serializes non-finite floats to JSON null,
+        # which used to fail the tool's own number-typed output schema
+        # and blow up the call. The wrapper now reports this case
+        # explicitly instead of crashing.
+        result, _ = asyncio.run(_call(
+            "cohens_d", {"a": [0, 0, 0, 0], "b": [1, 1, 1, 1]}
+        ))
+        self.assertIsNone(result["value"])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertIn("infinite", result["warnings"][0])
 
 
 if __name__ == "__main__":

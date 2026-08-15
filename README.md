@@ -82,14 +82,17 @@ pip install "mcp[cli]"
 PYTHONPATH=. mcp dev rigor/mcp_server.py
 ```
 
-## Known limitation
+## A transport-level edge case, handled
 
 `cohens_d` correctly returns `+inf`/`-inf` for zero-variance samples
 (per its own documented contract), but non-finite floats serialize to
-JSON `null` over MCP's structured content, which then fails the tool's
-own number-typed output schema. Degenerate input — not fixed, but
-pinned down by `tests/test_mcp_server.py` so a future SDK change to
-this behavior gets noticed rather than passing quietly.
+JSON `null` over MCP's structured content — which used to fail the
+tool's own number-typed output schema and crash the call. The MCP
+`cohens_d` tool now returns `{"value": float | null, "warnings": [...]}`
+instead of a bare float, so that case is reported explicitly (null
+value, a warning naming the direction) rather than blowing up. Every
+other numeric tool here is bounded and always finite for valid input,
+so this treatment is specific to `cohens_d`.
 
 ## Tests
 
@@ -97,7 +100,7 @@ this behavior gets noticed rather than passing quietly.
 python3 -m unittest discover -s tests -v
 ```
 
-69 tests: 65 exercise the statistics directly; 4 spawn `mcp_server.py`
+70 tests: 65 exercise the statistics directly; 5 spawn `mcp_server.py`
 as a real MCP client would and check results over the wire (skipped
 automatically if `mcp` isn't installed).
 
