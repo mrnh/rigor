@@ -136,3 +136,5 @@ automatically if `mcp` isn't installed).
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+[![rigor MCP server](https://glama.ai/mcp/servers/mrnh/rigor/badges/card.svg)](https://glama.ai/mcp/servers/mrnh/rigor)
