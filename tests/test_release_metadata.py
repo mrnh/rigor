@@ -23,13 +23,29 @@ def _pyproject_version() -> str:
 
 
 class TestReleaseMetadataIsInSync(unittest.TestCase):
+    def _load_server_json(self) -> dict:
+        with open(os.path.join(REPO_ROOT, "server.json")) as f:
+            return json.load(f)
+
     def test_server_json_version_matches_pyproject(self):
         version = _pyproject_version()
-        with open(os.path.join(REPO_ROOT, "server.json")) as f:
-            server = json.load(f)
+        server = self._load_server_json()
         self.assertEqual(server["version"], version, "server.json's top-level version is stale relative to pyproject.toml")
         for pkg in server["packages"]:
             self.assertEqual(pkg["version"], version, f"server.json package {pkg.get('identifier')} version is stale relative to pyproject.toml")
+
+    def test_server_json_description_fits_registry_limit(self):
+        # The MCP Registry's schema caps description at 100 chars and
+        # rejects the whole publish (a hard CI failure, not a warning)
+        # if it's over -- found the hard way when a more-descriptive
+        # edit here broke the publish-mcp-registry CI job.
+        server = self._load_server_json()
+        description = server["description"]
+        self.assertLessEqual(len(description), 100, f"server.json description is {len(description)} chars, over the registry's 100-char limit: {description!r}")
+
+    def test_server_json_name_fits_registry_limit(self):
+        server = self._load_server_json()
+        self.assertLessEqual(len(server["name"]), 200)
 
 
 if __name__ == "__main__":
