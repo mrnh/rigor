@@ -10,6 +10,7 @@ same instinct behind ``vault`` not asking for passwords: be useful
 without quietly overreaching what's actually known.
 """
 import math
+import statistics
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
@@ -293,4 +294,100 @@ def one_way_anova(*groups: Sequence[float]) -> TestResult:
         p_value=p,
         citation="One-way analysis of variance (Fisher, 1925); F(df_between, df_within).",
         warnings=["df_within is small; the F-test's power will be limited."] if df_within < 10 else [],
+    )
+
+
+def levene_test(*groups: Sequence[float]) -> TestResult:
+    """H0: all groups have equal population variances (homogeneity of
+    variance). Use to decide equal_var for two_sample_t_test, or to
+    sanity-check one_way_anova's equal-variance assumption -- rejecting
+    H0 here means Welch's t-test (the default) or a variance-robust
+    ANOVA is the safer choice over the pooled-variance version.
+
+    Uses the Brown-Forsythe variant (deviations from each group's
+    *median* rather than its mean), which is more robust to non-normal
+    data than Levene's original mean-based version -- then runs
+    one_way_anova on those deviations, which is exactly what the test
+    reduces to."""
+    if len(groups) < 2:
+        raise ValueError("need at least 2 groups")
+    deviations = []
+    for g in groups:
+        if len(g) < 2:
+            raise ValueError("each group needs at least 2 observations")
+        med = statistics.median(g)
+        deviations.append([abs(x - med) for x in g])
+    result = one_way_anova(*deviations)
+    return TestResult(
+        name="Levene's test (Brown-Forsythe)",
+        statistic=result.statistic,
+        df=result.df,
+        df2=result.df2,
+        p_value=result.p_value,
+        citation=(
+            "Levene's test (Levene, 1960), Brown-Forsythe median-based variant "
+            "(Brown & Forsythe, 1974); computed as a one-way ANOVA on absolute "
+            "deviations from each group's median."
+        ),
+        warnings=result.warnings,
+    )
+
+
+def _log_choose(n: int, k: int) -> float:
+    return math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
+
+
+def _hypergeom_pmf(a: int, row1: int, row2: int, col1: int) -> float:
+    """P(top-left cell == a) for a 2x2 table with fixed margins row1/row2/col1."""
+    return math.exp(_log_choose(row1, a) + _log_choose(row2, col1 - a) - _log_choose(row1 + row2, col1))
+
+
+def fisher_exact_test(table: Sequence[Sequence[float]]) -> TestResult:
+    """H0: the row and column variables of a 2x2 contingency table are
+    independent. Exact -- computed from the hypergeometric distribution
+    over every table with the same row/column totals, rather than the
+    chi-squared approximation chi_square_independence uses -- so it's
+    the right choice for small samples, or whenever
+    chi_square_independence warns that an expected cell count is below
+    5. 2x2 tables only; entries must be non-negative integers.
+
+    ``statistic`` is the sample odds ratio ((a*d)/(b*c) for table
+    [[a,b],[c,d]]); +-inf/0 when a zero cell makes it degenerate. The
+    p-value is two-tailed, summing every table's probability that is no
+    larger than the observed table's."""
+    if len(table) != 2 or len(table[0]) != 2 or len(table[1]) != 2:
+        raise ValueError("fisher_exact_test needs a 2x2 table")
+    (a, b), (c, d) = table
+    for v in (a, b, c, d):
+        if v != int(v) or v < 0:
+            raise ValueError("all cell counts must be non-negative integers")
+    a, b, c, d = int(a), int(b), int(c), int(d)
+    row1, row2 = a + b, c + d
+    col1, col2 = a + c, b + d
+    n = row1 + row2
+    if n == 0:
+        raise ValueError("table is empty")
+
+    lo, hi = max(0, col1 - row2), min(row1, col1)
+    observed_p = _hypergeom_pmf(a, row1, row2, col1)
+    p_value = min(1.0, sum(
+        p for x in range(lo, hi + 1)
+        if (p := _hypergeom_pmf(x, row1, row2, col1)) <= observed_p * (1 + 1e-7)
+    ))
+    if b > 0 and c > 0:
+        odds_ratio = (a * d) / (b * c)
+    elif a > 0 and d > 0:
+        odds_ratio = math.inf
+    else:
+        odds_ratio = 0.0 if (a == 0 or d == 0) else float("nan")
+
+    warnings = []
+    if n > 200:
+        warnings.append(f"n={n} is fairly large for an exact test -- chi_square_independence's approximation is likely fine here and much faster.")
+    return TestResult(
+        name="Fisher's exact test",
+        statistic=odds_ratio,
+        p_value=p_value,
+        citation="Fisher's exact test (Fisher, 1922), two-tailed via summing hypergeometric probabilities no larger than the observed table's.",
+        warnings=warnings,
     )

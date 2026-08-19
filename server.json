@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.mrnh/rigor-mcp",
-  "description": "Verified statistical inference for AI agents: t-tests, effect sizes, power, and corrections.",
+  "description": "Verified statistical inference for AI agents: parametric and non-parametric hypothesis tests, correlation/regression, effect sizes, power/sample-size, multiple-comparisons correction, a test-recommendation helper, and a batch pairwise-comparison tool.",
   "repository": {
     "url": "https://github.com/mrnh/rigor",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.3.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "rigor-mcp",
-      "version": "0.1.1",
+      "version": "0.3.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

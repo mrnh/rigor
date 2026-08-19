@@ -1,6 +1,7 @@
 """Hypothesis tests checked against known textbook examples and internal
 consistency (e.g. a paired t-test must exactly equal a one-sample t-test
 on the differences, since that's what it is by definition)."""
+import math
 import unittest
 
 from rigor import inference as inf
@@ -166,6 +167,56 @@ class TestOneWayAnova(unittest.TestCase):
     def test_requires_at_least_two_groups(self):
         with self.assertRaises(ValueError):
             inf.one_way_anova([1, 2, 3])
+
+
+class TestLeveneTest(unittest.TestCase):
+    def test_identical_spread_gives_zero_statistic(self):
+        # groups have different means but the same spread around their
+        # own median (shifted copies of each other) -> Levene's should
+        # see equal variances.
+        result = inf.levene_test([1, 2, 3, 4, 5], [11, 12, 13, 14, 15], [21, 22, 23, 24, 25])
+        self.assertAlmostEqual(result.statistic, 0.0, places=9)
+        self.assertAlmostEqual(result.p_value, 1.0, places=6)
+
+    def test_clearly_different_spread_is_significant(self):
+        tight = [10, 10, 10, 10, 10, 10]
+        wide = [0, 5, 10, 15, 20, 25]
+        result = inf.levene_test(tight, wide)
+        self.assertLess(result.p_value, 0.05)
+
+    def test_requires_at_least_two_groups(self):
+        with self.assertRaises(ValueError):
+            inf.levene_test([1, 2, 3])
+
+
+class TestFisherExactTest(unittest.TestCase):
+    def test_matches_lady_tasting_tea_reference_case(self):
+        # Fisher's original example: 8 cups, table [[3,1],[1,3]] ->
+        # well-known two-sided p ~= 0.4857 (verified independently via
+        # brute-force hypergeometric summation with math.comb, not just
+        # by reasoning about this module's own implementation).
+        result = inf.fisher_exact_test([[3, 1], [1, 3]])
+        self.assertAlmostEqual(result.p_value, 0.4857142857142857, places=9)
+
+    def test_perfect_association_gives_low_p_value(self):
+        result = inf.fisher_exact_test([[9, 0], [0, 9]])
+        self.assertLess(result.p_value, 0.001)
+        self.assertEqual(result.statistic, math.inf)
+
+    def test_independence_gives_high_p_value(self):
+        result = inf.fisher_exact_test([[10, 10], [10, 10]])
+        self.assertAlmostEqual(result.statistic, 1.0, places=9)
+        self.assertGreater(result.p_value, 0.5)
+
+    def test_requires_2x2(self):
+        with self.assertRaises(ValueError):
+            inf.fisher_exact_test([[1, 2, 3], [4, 5, 6]])
+
+    def test_requires_nonnegative_integer_counts(self):
+        with self.assertRaises(ValueError):
+            inf.fisher_exact_test([[1.5, 2], [3, 4]])
+        with self.assertRaises(ValueError):
+            inf.fisher_exact_test([[-1, 2], [3, 4]])
 
 
 if __name__ == "__main__":

@@ -72,3 +72,55 @@ def cramers_v(chi2_statistic: float, n: int, rows: int, cols: int) -> float:
     if k < 2:
         raise ValueError("need at least a 2x2 table")
     return math.sqrt(chi2_statistic / (n * (k - 1)))
+
+
+def eta_squared(*groups: Sequence[float]) -> float:
+    """Proportion of total variance explained by group membership, for a
+    one-way ANOVA (Cohen, 1988 notation; equivalent to R^2 for a
+    one-way design). Rough guidance: ~0.01 small, ~0.06 medium, ~0.14
+    large. Biased upward for small samples -- see omega_squared for a
+    less-biased version."""
+    if len(groups) < 2:
+        raise ValueError("need at least 2 groups")
+    all_values = [x for g in groups for x in g]
+    grand_mean = _mean(all_values)
+    ss_between = sum(len(g) * (_mean(g) - grand_mean) ** 2 for g in groups)
+    ss_total = sum((x - grand_mean) ** 2 for x in all_values)
+    if ss_total == 0.0:
+        return 0.0
+    return ss_between / ss_total
+
+
+def omega_squared(*groups: Sequence[float]) -> float:
+    """Effect size for a one-way ANOVA (Hays, 1963), less biased than
+    eta_squared for small samples since it subtracts out the variance
+    explained by chance alone. Can come out slightly negative when the
+    true effect is ~0 -- that's expected, not a bug; clamp to 0 for
+    reporting if a non-negative value is wanted."""
+    if len(groups) < 2:
+        raise ValueError("need at least 2 groups")
+    k = len(groups)
+    all_values = [x for g in groups for x in g]
+    n = len(all_values)
+    grand_mean = _mean(all_values)
+    ss_between = sum(len(g) * (_mean(g) - grand_mean) ** 2 for g in groups)
+    ss_total = sum((x - grand_mean) ** 2 for x in all_values)
+    ss_within = ss_total - ss_between
+    df_between = k - 1
+    ms_within = ss_within / (n - k) if n > k else 0.0
+    denom = ss_total + ms_within
+    if denom == 0.0:
+        return 0.0
+    return (ss_between - df_between * ms_within) / denom
+
+
+def rank_biserial_correlation(u1_statistic: float, n1: int, n2: int) -> float:
+    """Effect size for a Mann-Whitney U test (Wendt, 1972), in [-1, 1].
+    Call with the ``statistic`` mann_whitney_u(sample1, sample2) returns
+    (U for sample1, its documented convention) and the two sample sizes.
+    Positive means sample1's values tend to exceed sample2's; negative
+    means the reverse; 0 is no tendency either way. Rough guidance
+    mirrors Cohen's d: ~0.1 small, ~0.3 medium, ~0.5 large."""
+    if n1 <= 0 or n2 <= 0:
+        raise ValueError("n1 and n2 must be positive")
+    return (2.0 * u1_statistic) / (n1 * n2) - 1.0

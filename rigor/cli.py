@@ -18,21 +18,36 @@ straight from a checkout without installing):
     rigor ztest two-proportion --successes1 80 --n1 100 --successes2 20 --n2 100
     rigor chi2 goodness-of-fit --observed 5,8,9 --expected 10,10,10
     rigor chi2 independence --table "10,20;30,40"
+    rigor fisher --table "3,1;1,3"
     rigor anova --groups "1,2,3|4,5,6|7,8,9"
+    rigor levene --groups "1,2,3,4|10,11,12,13"
+    rigor nonparam mann-whitney --a 1,2,3 --b 4,5,6
+    rigor nonparam wilcoxon --a 5,6,7,8 --b 1,2,3,4
+    rigor nonparam kruskal-wallis --groups "1,2|3,4|5,6"
+    rigor corr pearson --x 1,2,3,4,5 --y 2,4,5,4,5
+    rigor corr spearman --x 1,2,3,4,5 --y 2,4,5,4,5
+    rigor regress --x 1,2,3,4,5 --y 3,5,7,9,11
     rigor effect-size cohens-d --a 1,2,3 --b 4,5,6
     rigor effect-size cohens-h --p1 0.6 --p2 0.3
     rigor effect-size cramers-v --chi2 10 --n 100 --rows 2 --cols 2
+    rigor effect-size eta-squared --groups "1,2,3|4,5,6|7,8,9"
+    rigor effect-size omega-squared --groups "1,2,3|4,5,6|7,8,9"
+    rigor effect-size rank-biserial --u1 0 --n1 3 --n2 3
     rigor power ttest-2samp --effect-size 0.5 --power 0.8      # -> required n
     rigor power ttest-2samp --effect-size 0.5 --n 64           # -> achieved power
+    rigor power ttest-1samp --effect-size 0.5 --power 0.8
     rigor power proportion --p1 0.5 --p2 0.4 --power 0.8
     rigor correct bonferroni --p 0.01,0.02,0.03,0.04
     rigor correct bh --p 0.01,0.02,0.03,0.04
+    rigor recommend --outcome-type continuous --n-groups 3
+    rigor recommend --outcome-type continuous --n-groups 2 --paired --small-or-skewed
+    rigor posthoc --groups "1,2,3|4,5,6|7,8,9" --labels A,B,C
 """
 import argparse
 import math
 import sys
 
-from rigor import corrections, effect_size, inference, power
+from rigor import advisor, batch, correlation, corrections, effect_size, inference, nonparametric, power, regression
 
 
 def _floats(csv: str):
@@ -65,6 +80,53 @@ def _print_correction(result: corrections.CorrectionResult) -> None:
     for p, rej in zip(result.p_values, result.reject):
         print(f"  p={p:.6g}  {'REJECT (significant)' if rej else 'fail to reject'}")
     print(f"  citation = {result.citation}")
+
+
+def _print_regression(result: regression.RegressionResult) -> None:
+    print("Simple linear regression")
+    print(f"  slope       = {result.slope:.6g}")
+    print(f"  intercept   = {result.intercept:.6g}")
+    print(f"  R^2         = {result.r_squared:.6g}")
+    print(f"  slope t     = {result.slope_t:.6g}  (df={result.df})")
+    print(f"  slope p     = {result.slope_p_value:.6g}")
+    lo, hi = result.slope_confidence_interval
+    pct = int(result.confidence_level * 100)
+    print(f"  slope {pct}% CI = ({lo:.6g}, {hi:.6g})")
+    print(f"  citation    = {result.citation}")
+    for w in result.warnings:
+        print(f"  warning     : {w}")
+
+
+def _print_recommendation(rec: advisor.TestRecommendation) -> None:
+    print(f"Recommended tool: {rec.recommended_tool}")
+    print(f"  reasoning = {rec.reasoning}")
+    if rec.alternative_tool:
+        print(f"  alternative: {rec.alternative_tool} -- {rec.alternative_reasoning}")
+    if rec.effect_size_tool:
+        print(f"  effect size: {rec.effect_size_tool}")
+    if rec.power_tool:
+        print(f"  power: {rec.power_tool}")
+    for step in rec.next_steps:
+        print(f"  next step: {step}")
+    for c in rec.caveats:
+        print(f"  caveat: {c}")
+
+
+def _print_pairwise(result: batch.PairwiseComparisonResult) -> None:
+    print(f"Pairwise comparisons ({result.test}, {result.correction_method} correction, alpha={result.alpha})")
+    if result.adjusted_alpha is not None:
+        print(f"  adjusted alpha = {result.adjusted_alpha:.6g}")
+    for c in result.comparisons:
+        i_label = c.label_i if c.label_i is not None else str(c.group_i)
+        j_label = c.label_j if c.label_j is not None else str(c.group_j)
+        es = f", {c.effect_size_name}={c.effect_size:.4g}" if c.effect_size is not None else ""
+        print(
+            f"  {i_label} vs {j_label}: statistic={c.statistic:.6g}  p={c.p_value:.6g}  "
+            f"{'REJECT (significant)' if c.p_value_adjusted_significant else 'fail to reject'}{es}"
+        )
+    print(f"  citation = {result.citation}")
+    for w in result.warnings:
+        print(f"  warning  : {w}")
 
 
 def cmd_ttest(args) -> int:
@@ -104,6 +166,48 @@ def cmd_anova(args) -> int:
     return 0
 
 
+def cmd_levene(args) -> int:
+    groups = [_floats(g) for g in args.groups.split("|")]
+    result = inference.levene_test(*groups)
+    _print_result(result, args.alpha)
+    return 0
+
+
+def cmd_fisher(args) -> int:
+    table = [[float(x) for x in row.split(",")] for row in args.table.split(";")]
+    result = inference.fisher_exact_test(table)
+    _print_result(result, args.alpha)
+    return 0
+
+
+def cmd_nonparam(args) -> int:
+    if args.nonparam_kind == "mann-whitney":
+        result = nonparametric.mann_whitney_u(_floats(args.a), _floats(args.b))
+    elif args.nonparam_kind == "wilcoxon":
+        result = nonparametric.wilcoxon_signed_rank(_floats(args.a), _floats(args.b))
+    else:  # kruskal-wallis
+        groups = [_floats(g) for g in args.groups.split("|")]
+        result = nonparametric.kruskal_wallis(*groups)
+    _print_result(result, args.alpha)
+    return 0
+
+
+def cmd_corr(args) -> int:
+    x, y = _floats(args.x), _floats(args.y)
+    if args.corr_kind == "pearson":
+        result = correlation.pearson_correlation(x, y)
+    else:  # spearman
+        result = correlation.spearman_correlation(x, y)
+    _print_result(result, args.alpha)
+    return 0
+
+
+def cmd_regress(args) -> int:
+    result = regression.simple_linear_regression(_floats(args.x), _floats(args.y))
+    _print_regression(result)
+    return 0
+
+
 def cmd_effect_size(args) -> int:
     if args.es_kind == "cohens-d":
         value = effect_size.cohens_d(_floats(args.a), _floats(args.b))
@@ -114,9 +218,20 @@ def cmd_effect_size(args) -> int:
     elif args.es_kind == "cohens-h":
         value = effect_size.cohens_h(args.p1, args.p2)
         print(f"Cohen's h = {value:.6g}")
-    else:  # cramers-v
+    elif args.es_kind == "cramers-v":
         value = effect_size.cramers_v(args.chi2, args.n, args.rows, args.cols)
         print(f"Cramer's V = {value:.6g}")
+    elif args.es_kind == "eta-squared":
+        groups = [_floats(g) for g in args.groups.split("|")]
+        value = effect_size.eta_squared(*groups)
+        print(f"eta^2 = {value:.6g}")
+    elif args.es_kind == "omega-squared":
+        groups = [_floats(g) for g in args.groups.split("|")]
+        value = effect_size.omega_squared(*groups)
+        print(f"omega^2 = {value:.6g}")
+    else:  # rank-biserial
+        value = effect_size.rank_biserial_correlation(args.u1, args.n1, args.n2)
+        print(f"rank-biserial r = {value:.6g}")
     return 0
 
 
@@ -152,6 +267,29 @@ def cmd_correct(args) -> int:
     else:  # bh
         result = corrections.benjamini_hochberg(p_values, args.alpha)
     _print_correction(result)
+    return 0
+
+
+def cmd_recommend(args) -> int:
+    rec = advisor.recommend_test(
+        args.outcome_type,
+        n_groups=args.n_groups,
+        paired=args.paired,
+        small_or_skewed=args.small_or_skewed,
+        two_categorical_variables=args.two_categorical_variables,
+        testing_association=args.testing_association,
+    )
+    _print_recommendation(rec)
+    return 0
+
+
+def cmd_posthoc(args) -> int:
+    groups = [_floats(g) for g in args.groups.split("|")]
+    labels = args.labels.split(",") if args.labels else None
+    result = batch.pairwise_group_comparisons(
+        groups, labels=labels, test=args.test, equal_var=args.equal_var, correction=args.correction, alpha=args.alpha,
+    )
+    _print_pairwise(result)
     return 0
 
 
@@ -194,8 +332,40 @@ def main(argv=None) -> int:
     p_anova.add_argument("--alpha", type=float, default=0.05)
     p_anova.set_defaults(func=cmd_anova)
 
+    p_levene = sub.add_parser("levene", help="Levene's (Brown-Forsythe) test for equal variances")
+    p_levene.add_argument("--groups", required=True, help="groups separated by '|', values by ',' e.g. '1,2,3|4,5,6'")
+    p_levene.add_argument("--alpha", type=float, default=0.05)
+    p_levene.set_defaults(func=cmd_levene)
+
+    p_fisher = sub.add_parser("fisher", help="Fisher's exact test for a 2x2 table")
+    p_fisher.add_argument("--table", required=True, help="2x2 table, rows separated by ';', values by ',' e.g. '3,1;1,3'")
+    p_fisher.add_argument("--alpha", type=float, default=0.05)
+    p_fisher.set_defaults(func=cmd_fisher)
+
+    p_nonparam = sub.add_parser("nonparam", help="non-parametric alternatives to the t-test/ANOVA family")
+    p_nonparam.add_argument("nonparam_kind", choices=["mann-whitney", "wilcoxon", "kruskal-wallis"])
+    p_nonparam.add_argument("--a", help="comma-separated sample A (mann-whitney, wilcoxon)")
+    p_nonparam.add_argument("--b", help="comma-separated sample B (mann-whitney, wilcoxon)")
+    p_nonparam.add_argument("--groups", help="groups separated by '|', values by ',' (kruskal-wallis)")
+    p_nonparam.add_argument("--alpha", type=float, default=0.05)
+    p_nonparam.set_defaults(func=cmd_nonparam)
+
+    p_corr = sub.add_parser("corr", help="correlation between two paired variables")
+    p_corr.add_argument("corr_kind", choices=["pearson", "spearman"])
+    p_corr.add_argument("--x", required=True, help="comma-separated variable X")
+    p_corr.add_argument("--y", required=True, help="comma-separated variable Y")
+    p_corr.add_argument("--alpha", type=float, default=0.05)
+    p_corr.set_defaults(func=cmd_corr)
+
+    p_regress = sub.add_parser("regress", help="simple (single-predictor) linear regression")
+    p_regress.add_argument("--x", required=True, help="comma-separated predictor variable")
+    p_regress.add_argument("--y", required=True, help="comma-separated outcome variable")
+    p_regress.set_defaults(func=cmd_regress)
+
     p_es = sub.add_parser("effect-size", help="effect size measures")
-    p_es.add_argument("es_kind", choices=["cohens-d", "hedges-g", "cohens-h", "cramers-v"])
+    p_es.add_argument("es_kind", choices=[
+        "cohens-d", "hedges-g", "cohens-h", "cramers-v", "eta-squared", "omega-squared", "rank-biserial",
+    ])
     p_es.add_argument("--a", help="comma-separated sample A")
     p_es.add_argument("--b", help="comma-separated sample B")
     p_es.add_argument("--p1", type=float)
@@ -204,6 +374,10 @@ def main(argv=None) -> int:
     p_es.add_argument("--n", type=int)
     p_es.add_argument("--rows", type=int)
     p_es.add_argument("--cols", type=int)
+    p_es.add_argument("--groups", help="groups separated by '|', values by ',' (eta-squared, omega-squared)")
+    p_es.add_argument("--u1", type=float, help="U statistic for sample 1, from `rigor nonparam mann-whitney` (rank-biserial)")
+    p_es.add_argument("--n1", type=int, help="size of sample 1 (rank-biserial)")
+    p_es.add_argument("--n2", type=int, help="size of sample 2 (rank-biserial)")
     p_es.set_defaults(func=cmd_effect_size)
 
     p_power = sub.add_parser("power", help="power / sample-size calculators")
@@ -221,6 +395,25 @@ def main(argv=None) -> int:
     p_correct.add_argument("--p", required=True, help="comma-separated p-values")
     p_correct.add_argument("--alpha", type=float, default=0.05)
     p_correct.set_defaults(func=cmd_correct)
+
+    p_recommend = sub.add_parser("recommend", help="which test/tool fits a question -- a decision helper, computes nothing")
+    p_recommend.add_argument("--outcome-type", dest="outcome_type", required=True,
+                              choices=["continuous", "proportion", "count_or_category", "rank_or_ordinal"])
+    p_recommend.add_argument("--n-groups", dest="n_groups", type=int, default=2)
+    p_recommend.add_argument("--paired", action="store_true")
+    p_recommend.add_argument("--small-or-skewed", dest="small_or_skewed", action="store_true")
+    p_recommend.add_argument("--two-categorical-variables", dest="two_categorical_variables", action="store_true")
+    p_recommend.add_argument("--testing-association", dest="testing_association", action="store_true")
+    p_recommend.set_defaults(func=cmd_recommend)
+
+    p_posthoc = sub.add_parser("posthoc", help="pairwise comparisons across 2+ groups, corrected for multiple comparisons")
+    p_posthoc.add_argument("--groups", required=True, help="groups separated by '|', values by ',' e.g. '1,2,3|4,5,6'")
+    p_posthoc.add_argument("--labels", help="comma-separated name per group, same order as --groups")
+    p_posthoc.add_argument("--test", choices=["t_test", "mann_whitney"], default="t_test")
+    p_posthoc.add_argument("--equal-var", dest="equal_var", action="store_true", help="only used with --test t_test: pooled variance instead of Welch's")
+    p_posthoc.add_argument("--correction", choices=["bonferroni", "bh", "none"], default="bh")
+    p_posthoc.add_argument("--alpha", type=float, default=0.05)
+    p_posthoc.set_defaults(func=cmd_posthoc)
 
     args = parser.parse_args(argv)
     return args.func(args)
