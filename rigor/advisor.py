@@ -123,6 +123,70 @@ def _continuous_recommendation(n_groups: int, paired: bool, small_or_skewed: boo
     return rec
 
 
+def _apply_checked_repeatedly(
+    rec: TestRecommendation, outcome_type: str, n_groups: int, paired: bool, small_or_skewed: bool, checked_repeatedly: bool
+) -> TestRecommendation:
+    """If checked_repeatedly is set, swap in the always-valid sequential
+    tool where one exists (currently: two independent groups, continuous
+    or proportion outcome), or flag it as a known gap otherwise --
+    same "known gap, stated explicitly" treatment as the missing
+    one-sample non-parametric test and matched-pairs proportion test
+    elsewhere in this module. rigor.sequential's whole reason to exist
+    is that a fixed-sample p-value checked more than once and stopped
+    at the first significant look isn't valid at the stated alpha
+    (rigor.sequential.naive_peeking_inflation quantifies exactly how
+    much that costs) -- so recommend_test needs to know about it too,
+    not just the individual test docstrings.
+    """
+    if not checked_repeatedly:
+        return rec
+    if outcome_type == "continuous" and n_groups == 2 and not paired and not small_or_skewed:
+        return TestRecommendation(
+            recommended_tool="sequential_two_sample_mean_test",
+            reasoning=(
+                "Two independent samples, comparing means, and the result will be "
+                "checked more than once (e.g. a live experiment's dashboard) before "
+                "it's considered final. two_sample_t_test's p-value is only valid "
+                "for a single, pre-committed sample size -- checking it repeatedly "
+                "and stopping at the first p<alpha inflates the true false-positive "
+                "rate well past alpha."
+            ),
+            alternative_tool=rec.recommended_tool,
+            alternative_reasoning="Use instead only if the sample size is fixed in advance and the result will be checked exactly once.",
+            next_steps=[
+                "Pick tau (the mixing prior's sd) around the smallest mean "
+                f"difference worth detecting -- the same number {rec.power_tool or 'a fixed-sample power calculation'} would otherwise ask for.",
+                "No non-parametric sequential test is implemented here yet -- if normality is a serious concern, treat the result cautiously despite the always-valid guarantee on the false-positive rate itself.",
+            ],
+        )
+    if outcome_type == "proportion" and n_groups == 2 and not paired:
+        return TestRecommendation(
+            recommended_tool="sequential_two_proportion_test",
+            reasoning=(
+                "Comparing two independent proportions (e.g. two conversion "
+                "rates), and the result will be checked more than once before "
+                "it's considered final -- the same repeated-peeking problem as "
+                "the continuous case, and the same fix."
+            ),
+            alternative_tool=rec.recommended_tool,
+            alternative_reasoning="Use instead only if the sample size is fixed in advance and the result will be checked exactly once.",
+            next_steps=[
+                "Pick tau around the smallest proportion difference worth "
+                "detecting -- the same number sample_size_for_two_proportion_test "
+                "would otherwise ask for."
+            ],
+        )
+    rec.caveats.append(
+        "checked_repeatedly=True was requested, but no always-valid sequential "
+        "alternative is implemented here yet for this combination of "
+        "outcome_type/n_groups/paired/small_or_skewed. Repeatedly checking "
+        f"{rec.recommended_tool}'s p-value and stopping at the first significant "
+        "look still inflates the false-positive rate past alpha -- see "
+        "naive_peeking_inflation for how much."
+    )
+    return rec
+
+
 def recommend_test(
     outcome_type: str,
     n_groups: int = 2,
@@ -130,6 +194,7 @@ def recommend_test(
     small_or_skewed: bool = False,
     two_categorical_variables: bool = False,
     testing_association: bool = False,
+    checked_repeatedly: bool = False,
 ) -> TestRecommendation:
     """Recommend which rigor tool fits a question, and what to reach for
     if this test's assumptions don't hold.
@@ -158,6 +223,15 @@ def recommend_test(
     testing_association: this is "does x relate to/predict y" for two
     continuous (or ranked) variables, not a group comparison -- routes
     to correlation/regression instead.
+
+    checked_repeatedly: will this result be checked more than once as
+    data accumulates (e.g. a live experiment's dashboard) rather than
+    analyzed once against a pre-committed sample size? If so and a
+    peeking-safe sequential test exists for this shape of question
+    (currently: two independent groups, continuous or proportion),
+    recommends that instead of the fixed-sample test, since the
+    fixed-sample p-value isn't valid under repeated checking -- see
+    rigor.sequential's module docstring.
     """
     if outcome_type not in _OUTCOME_TYPES:
         raise ValueError(f"outcome_type must be one of {_OUTCOME_TYPES}")
@@ -166,7 +240,7 @@ def recommend_test(
 
     if testing_association:
         if small_or_skewed or outcome_type == "rank_or_ordinal":
-            return TestRecommendation(
+            rec = TestRecommendation(
                 recommended_tool="spearman_correlation",
                 reasoning=(
                     "Testing association between two variables where the "
@@ -177,28 +251,32 @@ def recommend_test(
                 alternative_reasoning="If the relationship is expected to be linear and the data is well-behaved, this is more powerful.",
                 next_steps=["Follow up with simple_linear_regression if you need the actual slope (units of y per unit of x), not just the strength of association."],
             )
-        return TestRecommendation(
-            recommended_tool="pearson_correlation",
-            reasoning="Testing for a linear association between two continuous variables.",
-            alternative_tool="spearman_correlation",
-            alternative_reasoning="Use instead if the relationship might be monotonic-but-not-linear, or outliers shouldn't dominate.",
-            next_steps=["Follow up with simple_linear_regression for the slope itself."],
-        )
+        else:
+            rec = TestRecommendation(
+                recommended_tool="pearson_correlation",
+                reasoning="Testing for a linear association between two continuous variables.",
+                alternative_tool="spearman_correlation",
+                alternative_reasoning="Use instead if the relationship might be monotonic-but-not-linear, or outliers shouldn't dominate.",
+                next_steps=["Follow up with simple_linear_regression for the slope itself."],
+            )
+        return _apply_checked_repeatedly(rec, "association", n_groups, paired, small_or_skewed, checked_repeatedly)
 
     if outcome_type == "continuous":
-        return _continuous_recommendation(n_groups, paired, small_or_skewed)
+        rec = _continuous_recommendation(n_groups, paired, small_or_skewed)
+        return _apply_checked_repeatedly(rec, outcome_type, n_groups, paired, small_or_skewed, checked_repeatedly)
 
     if outcome_type == "rank_or_ordinal":
         rec = _continuous_recommendation(n_groups, paired, small_or_skewed=True)
         rec.caveats.append("Ordinal data -- routed straight to the rank-based test regardless of sample size, since the values themselves aren't on an interval scale.")
-        return rec
+        return _apply_checked_repeatedly(rec, outcome_type, n_groups, paired, small_or_skewed=True, checked_repeatedly=checked_repeatedly)
 
     if outcome_type == "proportion":
         if n_groups == 1:
-            return TestRecommendation(
+            rec = TestRecommendation(
                 recommended_tool="one_proportion_z_test",
                 reasoning="Comparing a single observed proportion against a hypothesized value.",
             )
+            return _apply_checked_repeatedly(rec, outcome_type, n_groups, paired, small_or_skewed, checked_repeatedly)
         if n_groups == 2:
             rec = TestRecommendation(
                 recommended_tool="two_proportion_z_test",
@@ -213,8 +291,8 @@ def recommend_test(
                     "groups and isn't quite right here. No matched-pairs proportion "
                     "test (e.g. McNemar's) is implemented yet; treat this as a known gap."
                 )
-            return rec
-        return TestRecommendation(
+            return _apply_checked_repeatedly(rec, outcome_type, n_groups, paired, small_or_skewed, checked_repeatedly)
+        rec = TestRecommendation(
             recommended_tool="chi_square_independence",
             reasoning=(
                 "Comparing proportions across 3+ groups is a test of association "
@@ -223,6 +301,7 @@ def recommend_test(
             ),
             effect_size_tool="cramers_v",
         )
+        return _apply_checked_repeatedly(rec, outcome_type, n_groups, paired, small_or_skewed, checked_repeatedly)
 
     # count_or_category
     if two_categorical_variables:
@@ -236,8 +315,9 @@ def recommend_test(
             "(chi_square_independence will warn you), use fisher_exact_test instead "
             "-- it's exact rather than approximate."
         )
-        return rec
-    return TestRecommendation(
+        return _apply_checked_repeatedly(rec, outcome_type, n_groups, paired, small_or_skewed, checked_repeatedly)
+    rec = TestRecommendation(
         recommended_tool="chi_square_goodness_of_fit",
         reasoning="Testing whether observed category counts match an expected/hypothesized distribution.",
     )
+    return _apply_checked_repeatedly(rec, outcome_type, n_groups, paired, small_or_skewed, checked_repeatedly)

@@ -9,12 +9,15 @@ a t-statistic or a required sample size is a number recalled from
 training data, not computed and checked. `rigor` is the alternative:
 classical hypothesis testing (parametric and non-parametric),
 correlation and regression, effect sizes, power/sample-size
-calculation, and multiple-comparisons correction, computed from scratch
-and returned as a cited, assumption-checked answer -- plus a decision
-helper for picking the right tool and a batch tool for running/
-correcting many comparisons at once, since "which test do I even use"
-and "I forgot to correct for multiple comparisons" are their own common
-failure modes, distinct from getting a single formula wrong.
+calculation, multiple-comparisons correction, and always-valid
+sequential testing for results checked more than once before they're
+final, computed from scratch and returned as a cited, assumption-
+checked answer -- plus a decision helper for picking the right tool and
+a batch tool for running/correcting many comparisons at once, since
+"which test do I even use," "I forgot to correct for multiple
+comparisons," and "I peeked at the dashboard and stopped early" are
+their own common failure modes, distinct from getting a single formula
+wrong.
 
 **A concrete case where this matters.** The one sample-size number
 everyone half-remembers is Cohen (1988)'s own worked example: d=0.5,
@@ -34,6 +37,27 @@ famous one. The formula itself isn't hard (`power.py` runs the same
 bisection search either direction, in a few lines); the failure mode
 is that recalling a nearby-looking answer feels indistinguishable from
 computing the right one, right up until the number's wrong.
+
+**A second concrete case.** An agent (or person) watching a live
+experiment's dashboard and checking the p-value every time new data
+comes in, stopping the moment it clears 0.05, is a textbook way to
+fool yourself -- and it's the default way anyone actually monitors a
+running experiment, fixed-sample design or not:
+
+```sh
+$ rigor sequential peeking-inflation --n-looks 10
+Naive repeated peeking, 10 looks, nominal alpha=0.05
+  estimated true alpha = 0.1918 (+/- 0.0028 MC SE, 20000 trials)
+```
+
+Checking 10 times at a nominal 5% level is really running at closer to
+19% -- roughly one in five "significant" results would be noise even
+with zero real effect. `rigor sequential proportion` / `rigor
+sequential mean`
+compute an *always-valid* p-value instead (mSPRT, Johari et al. 2017):
+checkable after every new observation with the false-positive rate
+actually staying at the nominal level, no pre-committed sample size and
+no correction for "how many times have I looked" required.
 
 Built as an MCP server: a scan of the current MCP ecosystem (Context7
 for coding docs, several physics/engineering/chemistry/geo servers,
@@ -106,12 +130,15 @@ extra.
 - **`rigor/advisor.py`** — `recommend_test`: a decision helper, not a
   statistic. Answer a few characteristics of the data/question
   (continuous/proportion/categorical/ordinal, how many groups, paired,
-  small-or-skewed, association-not-difference) and get back which tool
-  to call, what to call instead if this test's assumptions look shaky,
-  and what to run alongside it -- compiling the cross-references every
-  other module's docstrings already carry into one callable answer, so
-  an agent doesn't need to have already read all of them to find the
-  relevant one.
+  small-or-skewed, association-not-difference, checked-repeatedly) and
+  get back which tool to call, what to call instead if this test's
+  assumptions look shaky, and what to run alongside it -- compiling the
+  cross-references every other module's docstrings already carry into
+  one callable answer, so an agent doesn't need to have already read
+  all of them to find the relevant one. `checked_repeatedly=True`
+  routes to a `sequential_*` tool where one exists (two independent
+  groups, continuous or proportion), and otherwise says so explicitly
+  rather than silently ignoring the flag.
 - **`rigor/batch.py`** — `pairwise_group_comparisons`: runs every
   pairwise comparison across 2+ groups (`two_sample_t_test` or
   `mann_whitney_u`, your choice) and applies Bonferroni/BH correction
@@ -120,10 +147,30 @@ extra.
   forgetting the correction step. The natural follow-up
   `one_way_anova`/`kruskal_wallis` already recommend in their own
   docstrings once a result comes back significant.
+- **`rigor/sequential.py`** — always-valid (peeking-safe) sequential
+  testing via the mixture sequential probability ratio test (mSPRT):
+  every other test in this package assumes a fixed sample size decided
+  in advance and checked once; this one is designed to be re-checked
+  after every new observation (e.g. a live A/B test dashboard) without
+  inflating the false-positive rate the way naively re-running a
+  fixed-sample test at each check does. Closed-form (Robbins 1970;
+  Johari, Koomen, Pekelis & Walsh 2017), covering two-sample means and
+  two proportions, plus `naive_peeking_inflation` -- a seeded Monte
+  Carlo demonstration of exactly the failure mode this exists to avoid.
+  The always-valid guarantee itself (not just a single p-value's
+  correctness) is checked by simulation in `tests/test_sequential.py`.
+  One deliberately counterintuitive choice: complete separation at a
+  small n (e.g. 0/5 vs. 5/5) reports *no* actionable evidence (p=1),
+  not the maximal evidence a one-shot Fisher's exact test would call it
+  -- because this test gets checked after every single observation,
+  and small-n complete separation happens under the null purely by
+  chance often enough (~40% at n=1 per arm) that treating it as proof
+  would defeat the always-valid guarantee itself. Caught by the
+  guarantee simulation during development, not by inspection.
 - **`rigor/cli.py`** — a CLI over all of the above (`rigor.py` at the
   repo root is a thin shim so `python3 rigor.py ...` also works from a
   plain checkout, without installing anything).
-- **`rigor/mcp_server.py`** — an MCP tool wrapper exposing all 32
+- **`rigor/mcp_server.py`** — an MCP tool wrapper exposing all 35
   operations to any MCP client (Claude Code, Claude Desktop, etc.).
   Smoke-tested end-to-end over stdio against a real client — tool
   discovery plus representative calls checked against known reference
@@ -143,9 +190,12 @@ rigor nonparam mann-whitney --a 1,2,3 --b 4,5,6
 rigor power ttest-2samp --effect-size 0.5 --power 0.8
 rigor recommend --outcome-type continuous --n-groups 3   # which test fits?
 rigor posthoc --groups "1,2,3|4,5,6|7,8,9" --labels A,B,C  # pairwise + correction
+rigor sequential proportion --successes1 55 --n1 500 --successes2 40 --n2 500 --tau 0.05
+                # ^ peeking-safe -- rerun as n1/n2 grow, no correction needed
+rigor sequential peeking-inflation --n-looks 10   # ...vs. naively checking 10 times
 rigor --help   # full list of subcommands (ttest, ztest, chi2, fisher, anova,
                 # levene, nonparam, corr, regress, effect-size, power, correct,
-                # recommend, posthoc)
+                # recommend, posthoc, sequential)
 ```
 
 or straight from a checkout without installing anything:
@@ -204,11 +254,18 @@ actually produce a non-finite value.
 python3 -m unittest discover -s tests -v
 ```
 
-153 tests: 140 exercise the statistics/decision logic directly; 12
-spawn `mcp_server.py` as a real MCP client would and check results over
-the wire (skipped automatically if `mcp` isn't installed); 1 checks
-that server.json's version hasn't drifted from pyproject.toml's (the
-two aren't otherwise linked -- see test_release_metadata.py).
+189 tests: 170 exercise the statistics/decision logic directly
+(including, for `sequential.py`, a simulation check that the
+always-valid guarantee itself holds under repeated peeking, not just
+that a single p-value comes out right -- and, during development, a
+simulation catching a real bug: an early draft treated small-n complete
+separation as maximal evidence rather than the small-sample noise it
+usually is, which broke that same guarantee); 16 spawn `mcp_server.py`
+as a real MCP client would and check results over the wire (skipped
+automatically if `mcp` isn't installed); 3 check that server.json's
+metadata (version, description length, name length) hasn't drifted
+from pyproject.toml's or the MCP Registry's own limits (the two files
+aren't otherwise linked -- see test_release_metadata.py).
 
 ## License
 
