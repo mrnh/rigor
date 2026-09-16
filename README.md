@@ -130,12 +130,15 @@ extra.
 - **`rigor/advisor.py`** — `recommend_test`: a decision helper, not a
   statistic. Answer a few characteristics of the data/question
   (continuous/proportion/categorical/ordinal, how many groups, paired,
-  small-or-skewed, association-not-difference) and get back which tool
-  to call, what to call instead if this test's assumptions look shaky,
-  and what to run alongside it -- compiling the cross-references every
-  other module's docstrings already carry into one callable answer, so
-  an agent doesn't need to have already read all of them to find the
-  relevant one.
+  small-or-skewed, association-not-difference, checked-repeatedly) and
+  get back which tool to call, what to call instead if this test's
+  assumptions look shaky, and what to run alongside it -- compiling the
+  cross-references every other module's docstrings already carry into
+  one callable answer, so an agent doesn't need to have already read
+  all of them to find the relevant one. `checked_repeatedly=True`
+  routes to a `sequential_*` tool where one exists (two independent
+  groups, continuous or proportion), and otherwise says so explicitly
+  rather than silently ignoring the flag.
 - **`rigor/batch.py`** — `pairwise_group_comparisons`: runs every
   pairwise comparison across 2+ groups (`two_sample_t_test` or
   `mann_whitney_u`, your choice) and applies Bonferroni/BH correction
@@ -156,6 +159,14 @@ extra.
   Carlo demonstration of exactly the failure mode this exists to avoid.
   The always-valid guarantee itself (not just a single p-value's
   correctness) is checked by simulation in `tests/test_sequential.py`.
+  One deliberately counterintuitive choice: complete separation at a
+  small n (e.g. 0/5 vs. 5/5) reports *no* actionable evidence (p=1),
+  not the maximal evidence a one-shot Fisher's exact test would call it
+  -- because this test gets checked after every single observation,
+  and small-n complete separation happens under the null purely by
+  chance often enough (~40% at n=1 per arm) that treating it as proof
+  would defeat the always-valid guarantee itself. Caught by the
+  guarantee simulation during development, not by inspection.
 - **`rigor/cli.py`** — a CLI over all of the above (`rigor.py` at the
   repo root is a thin shim so `python3 rigor.py ...` also works from a
   plain checkout, without installing anything).
@@ -243,14 +254,18 @@ actually produce a non-finite value.
 python3 -m unittest discover -s tests -v
 ```
 
-177 tests: 161 exercise the statistics/decision logic directly
+189 tests: 170 exercise the statistics/decision logic directly
 (including, for `sequential.py`, a simulation check that the
-always-valid guarantee itself holds under repeated peeking -- not just
-that a single p-value comes out right); 15 spawn `mcp_server.py` as a
-real MCP client would and check results over the wire (skipped
-automatically if `mcp` isn't installed); 1 checks that server.json's
-version hasn't drifted from pyproject.toml's (the two aren't otherwise
-linked -- see test_release_metadata.py).
+always-valid guarantee itself holds under repeated peeking, not just
+that a single p-value comes out right -- and, during development, a
+simulation catching a real bug: an early draft treated small-n complete
+separation as maximal evidence rather than the small-sample noise it
+usually is, which broke that same guarantee); 16 spawn `mcp_server.py`
+as a real MCP client would and check results over the wire (skipped
+automatically if `mcp` isn't installed); 3 check that server.json's
+metadata (version, description length, name length) hasn't drifted
+from pyproject.toml's or the MCP Registry's own limits (the two files
+aren't otherwise linked -- see test_release_metadata.py).
 
 ## License
 

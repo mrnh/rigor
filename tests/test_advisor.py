@@ -86,5 +86,63 @@ class TestRecommendTest(unittest.TestCase):
             advisor.recommend_test("continuous", n_groups=0)
 
 
+class TestRecommendTestCheckedRepeatedly(unittest.TestCase):
+    """checked_repeatedly is off by default (every case above passes
+    with the parameter simply omitted) -- these check the flag actually
+    changes behavior where a sequential tool exists, and is honest about
+    where one doesn't, rather than silently ignoring the flag."""
+
+    def test_default_is_off_and_does_not_change_existing_behavior(self):
+        with_default = advisor.recommend_test("continuous", n_groups=2)
+        explicit_false = advisor.recommend_test("continuous", n_groups=2, checked_repeatedly=False)
+        self.assertEqual(with_default, explicit_false)
+        self.assertEqual(with_default.recommended_tool, "two_sample_t_test")
+
+    def test_two_independent_groups_continuous_routes_to_sequential(self):
+        r = advisor.recommend_test("continuous", n_groups=2, checked_repeatedly=True)
+        self.assertEqual(r.recommended_tool, "sequential_two_sample_mean_test")
+        self.assertEqual(r.alternative_tool, "two_sample_t_test")
+
+    def test_two_independent_proportions_routes_to_sequential(self):
+        r = advisor.recommend_test("proportion", n_groups=2, checked_repeatedly=True)
+        self.assertEqual(r.recommended_tool, "sequential_two_proportion_test")
+        self.assertEqual(r.alternative_tool, "two_proportion_z_test")
+
+    def test_paired_continuous_has_no_sequential_alternative_yet(self):
+        # No sequential paired/one-sample test is implemented -- the
+        # ordinary recommendation should stand, flagged with a caveat
+        # rather than silently swapped for something that doesn't exist.
+        r = advisor.recommend_test("continuous", n_groups=2, paired=True, checked_repeatedly=True)
+        self.assertEqual(r.recommended_tool, "paired_t_test")
+        self.assertTrue(any("no always-valid sequential alternative" in c for c in r.caveats))
+
+    def test_skewed_continuous_has_no_sequential_alternative_yet(self):
+        r = advisor.recommend_test("continuous", n_groups=2, small_or_skewed=True, checked_repeatedly=True)
+        self.assertEqual(r.recommended_tool, "mann_whitney_u")
+        self.assertTrue(any("no always-valid sequential alternative" in c for c in r.caveats))
+
+    def test_three_plus_groups_has_no_sequential_alternative_yet(self):
+        r = advisor.recommend_test("continuous", n_groups=3, checked_repeatedly=True)
+        self.assertEqual(r.recommended_tool, "one_way_anova")
+        self.assertTrue(any("no always-valid sequential alternative" in c for c in r.caveats))
+
+    def test_paired_proportions_gets_both_the_mcnemar_and_sequential_caveats(self):
+        r = advisor.recommend_test("proportion", n_groups=2, paired=True, checked_repeatedly=True)
+        self.assertEqual(r.recommended_tool, "two_proportion_z_test")
+        self.assertTrue(any("McNemar" in c for c in r.caveats))
+        self.assertTrue(any("no always-valid sequential alternative" in c for c in r.caveats))
+
+    def test_association_is_not_mistaken_for_a_two_group_comparison(self):
+        # Regression guard: testing_association reuses outcome_type to
+        # mean "type of variable," not "type of comparison" -- with
+        # n_groups left at its default of 2, checked_repeatedly must
+        # not be misread as "two independent groups, continuous outcome"
+        # and wrongly recommend sequential_two_sample_mean_test for a
+        # correlation question.
+        r = advisor.recommend_test("continuous", testing_association=True, checked_repeatedly=True)
+        self.assertEqual(r.recommended_tool, "pearson_correlation")
+        self.assertTrue(any("no always-valid sequential alternative" in c for c in r.caveats))
+
+
 if __name__ == "__main__":
     unittest.main()

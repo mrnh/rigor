@@ -67,7 +67,6 @@ valid p-value, at n=50 or n=50000, with no correction to apply and no
 """
 import math
 import random
-import statistics
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence, Tuple
 
@@ -105,6 +104,39 @@ def _variance(xs: Sequence[float], mean: Optional[float] = None) -> float:
     if n < 2:
         raise ValueError("need at least 2 observations to estimate variance")
     return sum((x - m) ** 2 for x in xs) / (n - 1)
+
+
+def _zero_se_result(theta_hat: float) -> Tuple[float, float, float]:
+    """z, Lambda, p for the degenerate se=0 case (no variance observed
+    yet -- e.g. both groups still constant, or complete separation with
+    every observation on one side so far).
+
+    This is deliberately *not* the asymmetric convention
+    inference._safe_ratio uses for the same zero-variance situation in a
+    fixed-sample test (there, a nonzero difference against zero variance
+    is treated as the strongest possible evidence, z=+-inf). That
+    convention is wrong here: with a plug-in variance estimate checked
+    after every single observation, se hitting exactly 0 from pure
+    small-sample noise is *common*, not diagnostic. Complete separation
+    at n=1 per arm (one success, one failure) happens under the null
+    roughly as often as the two outcomes' base rate suggests -- verified
+    by simulation at ~42% for p=0.3, not a rare fluke -- so treating it
+    as certainty would let that 42% immediately "reject," gutting the
+    always-valid guarantee this whole module exists to provide (this
+    was caught by test_stopping_at_first_significant_look_still_bounds_
+    false_positive_rate, which failed at a ~42% false-positive rate
+    during development, exactly matching that fraction).
+
+    So: report p=1 and Lambda=1 (no actionable evidence) unconditionally
+    whenever se=0, regardless of theta_hat -- an early degenerate
+    variance estimate is a reason to distrust the statistic, not a
+    reason to declare victory. z is still reported honestly (0 for a
+    genuine tie, +-inf for an observed but not-yet-trustworthy
+    separation) since it's a plain descriptive fact about the data, not
+    a significance claim.
+    """
+    z = 0.0 if theta_hat == 0.0 else (math.inf if theta_hat > 0 else -math.inf)
+    return z, 1.0, 1.0
 
 
 def _mixture_log_likelihood_ratio(theta_hat: float, se: float, tau: float) -> float:
@@ -181,13 +213,28 @@ def sequential_two_sample_mean_test(
             "least reliable at small, early-look sample sizes -- treat an "
             "early result skeptically even if it clears alpha."
         )
-    lam, p = always_valid_p_value(theta_hat, se, tau)
+    if se == 0.0:
+        # Both samples constant so far (e.g. every observation identical
+        # within each group, or one group's constant value happens to
+        # differ from the other's) -- see _zero_se_result for why this
+        # conservatively reports p=1 even if theta_hat != 0.
+        z, lam, p = _zero_se_result(theta_hat)
+        warnings.append(
+            "se=0 (no variance observed in one or both samples yet) -- reporting "
+            "no actionable evidence (p=1) rather than treating this as certainty, "
+            "since a degenerate variance estimate this early is exactly the kind "
+            "of small-sample noise this test protects against. Revisit once more "
+            "data brings se above 0."
+        )
+    else:
+        z = theta_hat / se
+        lam, p = always_valid_p_value(theta_hat, se, tau)
     return SequentialTestResult(
         name="sequential two-sample mean test (mSPRT)",
         theta_hat=theta_hat,
         se=se,
         tau=tau,
-        z=theta_hat / se,
+        z=z,
         mixture_likelihood_ratio=lam,
         p_value=p,
         n1=n1,
@@ -212,36 +259,35 @@ def sequential_two_proportion_test(
     if n1 < 1 or n2 < 1:
         raise ValueError("need at least 1 observation per group")
     p1, p2 = successes1 / n1, successes2 / n2
-    se = math.sqrt(p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2) if n1 > 0 and n2 > 0 else 0.0
+    se = math.sqrt(p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2)
     theta_hat = p2 - p1
     warnings = []
     for label, n, p in (("group 1", n1, p1), ("group 2", n2, p2)):
         if n * p < 5 or n * (1 - p) < 5:
             warnings.append(f"{label}: n*p or n*(1-p) is below 5 -- normal approximation may be unreliable this early.")
     if se == 0.0:
-        # Both groups at 0% or both at 100% so far: no variance yet to
-        # standardize against. Zero evidence either way -- report the
-        # uninformative p=1 rather than dividing by zero.
-        return SequentialTestResult(
-            name="sequential two-proportion test (mSPRT)",
-            theta_hat=theta_hat,
-            se=se,
-            tau=tau,
-            z=0.0,
-            mixture_likelihood_ratio=1.0,
-            p_value=1.0,
-            n1=n1,
-            n2=n2,
-            citation="Sequential (mSPRT) two-proportion test.",
-            warnings=warnings + ["se=0 (no variance observed yet in either group) -- too little data to say anything."],
+        # Both groups at 0%/100% so far, including complete separation
+        # (e.g. 0/5 vs 5/5) -- see _zero_se_result for why that's
+        # reported as no actionable evidence (p=1) rather than
+        # certainty: at small n, complete separation happens under the
+        # null often enough by pure chance that treating it as proof
+        # would blow through the always-valid guarantee.
+        z, lam, p = _zero_se_result(theta_hat)
+        warnings.append(
+            "se=0 (both groups at 0% or 100% so far) -- reporting no actionable "
+            "evidence (p=1) rather than treating complete separation as proof, "
+            "since that can happen by pure chance at small n. Revisit once more "
+            "data brings se above 0."
         )
-    lam, p = always_valid_p_value(theta_hat, se, tau)
+    else:
+        z = theta_hat / se
+        lam, p = always_valid_p_value(theta_hat, se, tau)
     return SequentialTestResult(
         name="sequential two-proportion test (mSPRT)",
         theta_hat=theta_hat,
         se=se,
         tau=tau,
-        z=theta_hat / se,
+        z=z,
         mixture_likelihood_ratio=lam,
         p_value=p,
         n1=n1,

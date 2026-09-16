@@ -296,6 +296,7 @@ def cmd_recommend(args) -> int:
         small_or_skewed=args.small_or_skewed,
         two_categorical_variables=args.two_categorical_variables,
         testing_association=args.testing_association,
+        checked_repeatedly=args.checked_repeatedly,
     )
     _print_recommendation(rec)
     return 0
@@ -441,6 +442,7 @@ def main(argv=None) -> int:
     p_recommend.add_argument("--small-or-skewed", dest="small_or_skewed", action="store_true")
     p_recommend.add_argument("--two-categorical-variables", dest="two_categorical_variables", action="store_true")
     p_recommend.add_argument("--testing-association", dest="testing_association", action="store_true")
+    p_recommend.add_argument("--checked-repeatedly", dest="checked_repeatedly", action="store_true", help="will this be checked more than once as data accumulates? routes to a peeking-safe sequential_* tool where one exists")
     p_recommend.set_defaults(func=cmd_recommend)
 
     p_posthoc = sub.add_parser("posthoc", help="pairwise comparisons across 2+ groups, corrected for multiple comparisons")

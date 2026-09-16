@@ -669,6 +669,7 @@ def recommend_test(
     small_or_skewed: Annotated[bool, Field(description="is the sample small, visibly skewed, or outlier-heavy? nudges toward the non-parametric alternative")] = False,
     two_categorical_variables: Annotated[bool, Field(description='for outcome_type="count_or_category": testing association between two categorical variables (a contingency table) rather than counts against an expected distribution?')] = False,
     testing_association: Annotated[bool, Field(description='this is "does x relate to/predict y" for two continuous or ranked variables, not a group comparison -- routes to correlation/regression instead')] = False,
+    checked_repeatedly: Annotated[bool, Field(description="will this result be checked more than once as data accumulates (e.g. a live experiment's dashboard) rather than analyzed once against a pre-committed sample size? routes to a peeking-safe sequential_* tool instead, where one exists")] = False,
 ) -> dict:
     """Not sure which rigor tool fits your question? Answer a few
     characteristics of the data and get back which tool to call, why,
@@ -680,7 +681,7 @@ def recommend_test(
     read every other tool's docstring to find the one relevant
     cross-reference. Pure decision logic, no statistics computed here."""
     return _recommendation_dict(advisor.recommend_test(
-        outcome_type, n_groups, paired, small_or_skewed, two_categorical_variables, testing_association,
+        outcome_type, n_groups, paired, small_or_skewed, two_categorical_variables, testing_association, checked_repeatedly,
     ))
 
 

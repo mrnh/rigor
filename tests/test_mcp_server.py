@@ -110,6 +110,13 @@ class TestMCPServer(unittest.TestCase):
         ))
         self.assertEqual(result["recommended_tool"], "mann_whitney_u")
 
+    def test_recommend_test_checked_repeatedly_routes_to_sequential_tool(self):
+        result, _ = asyncio.run(_call(
+            "recommend_test", {"outcome_type": "proportion", "n_groups": 2, "checked_repeatedly": True}
+        ))
+        self.assertEqual(result["recommended_tool"], "sequential_two_proportion_test")
+        self.assertEqual(result["alternative_tool"], "two_proportion_z_test")
+
     def test_pairwise_group_comparisons_covers_every_pair(self):
         result, _ = asyncio.run(_call(
             "pairwise_group_comparisons",

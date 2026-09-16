@@ -7,6 +7,7 @@ checks that directly by simulation, the same way test_power.py checks
 sample_size/power are true inverses rather than trusting the formula by
 inspection alone.
 """
+import math
 import random
 import unittest
 
@@ -65,6 +66,33 @@ class TestSequentialTwoSampleMeanTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             seq.sequential_two_sample_mean_test([1.0], [1.0, 2.0], tau=1.0)
 
+    def test_zero_variance_identical_groups_gives_no_evidence_not_crash(self):
+        # Regression test: this used to raise ValueError("se must be
+        # positive") instead of handling the degenerate case the way
+        # inference._safe_ratio does for the classical t-test.
+        result = seq.sequential_two_sample_mean_test([5.0, 5.0, 5.0], [5.0, 5.0, 5.0], tau=1.0)
+        self.assertEqual(result.se, 0.0)
+        self.assertEqual(result.z, 0.0)
+        self.assertEqual(result.p_value, 1.0)
+        self.assertFalse(result.reject_null(0.05))
+        self.assertTrue(any("se=0" in w for w in result.warnings))
+
+    def test_zero_variance_different_groups_stays_conservative_not_certain(self):
+        # Same zero-variance crash, but with theta_hat != 0: every
+        # observation in a differs from every observation in b with no
+        # within-group spread at all. Tempting to read this as maximal
+        # evidence, but for a test meant to be checked after every new
+        # observation, a degenerate zero-variance estimate this early is
+        # exactly the kind of small-sample noise the always-valid
+        # guarantee has to stay robust to -- see _zero_se_result. z is
+        # still reported honestly (it *is* an infinite standardized
+        # gap), but p_value/reject_null must not follow it to certainty.
+        result = seq.sequential_two_sample_mean_test([5.0, 5.0, 5.0], [9.0, 9.0, 9.0], tau=1.0)
+        self.assertEqual(result.se, 0.0)
+        self.assertEqual(result.z, math.inf)
+        self.assertEqual(result.p_value, 1.0)
+        self.assertFalse(result.reject_null(0.05))
+
 
 class TestSequentialTwoProportionTest(unittest.TestCase):
     def test_strong_effect_is_significant(self):
@@ -76,10 +104,28 @@ class TestSequentialTwoProportionTest(unittest.TestCase):
         result = seq.sequential_two_proportion_test(500, 1000, 500, 1000, tau=0.05)
         self.assertEqual(result.p_value, 1.0)
 
-    def test_zero_variance_early_look_returns_p_one_not_crash(self):
+    def test_zero_variance_no_separation_returns_p_one_not_crash(self):
         result = seq.sequential_two_proportion_test(0, 1, 0, 1, tau=0.05)
         self.assertEqual(result.p_value, 1.0)
         self.assertTrue(any("se=0" in w for w in result.warnings))
+
+    def test_complete_separation_at_small_n_stays_conservative_not_certain(self):
+        # se=0 here comes from complete separation (0/5 vs 5/5). It's
+        # tempting to treat this as the strongest possible result (a
+        # one-shot Fisher's exact test on the same table would indeed
+        # call it significant, p~=0.008) -- but this is a *sequential*
+        # test, checked after every new observation, and complete
+        # separation at n=1 per arm happens under the null purely by
+        # chance far too often (~40%, verified by simulation during
+        # development) to treat as proof. p_value/reject_null must stay
+        # conservative; only z (a plain descriptive fact about the
+        # observed gap) reflects the separation.
+        result = seq.sequential_two_proportion_test(0, 5, 5, 5, tau=0.05)
+        self.assertEqual(result.se, 0.0)
+        self.assertEqual(result.theta_hat, 1.0)
+        self.assertEqual(result.z, math.inf)
+        self.assertEqual(result.p_value, 1.0)
+        self.assertFalse(result.reject_null(0.05))
 
     def test_out_of_range_successes_raises(self):
         with self.assertRaises(ValueError):
