@@ -19,6 +19,8 @@ straight from a checkout without installing):
     rigor chi2 goodness-of-fit --observed 5,8,9 --expected 10,10,10
     rigor chi2 independence --table "10,20;30,40"
     rigor fisher --table "3,1;1,3"
+    rigor mcnemar --table "794,86;150,570"        # paired proportions, e.g. before/after
+    rigor mcnemar-exact --table "5,1;8,2"          # few discordant pairs -> exact
     rigor anova --groups "1,2,3|4,5,6|7,8,9"
     rigor levene --groups "1,2,3,4|10,11,12,13"
     rigor nonparam mann-whitney --a 1,2,3 --b 4,5,6
@@ -194,6 +196,20 @@ def cmd_levene(args) -> int:
 def cmd_fisher(args) -> int:
     table = [[float(x) for x in row.split(",")] for row in args.table.split(";")]
     result = inference.fisher_exact_test(table)
+    _print_result(result, args.alpha)
+    return 0
+
+
+def cmd_mcnemar(args) -> int:
+    table = [[float(x) for x in row.split(",")] for row in args.table.split(";")]
+    result = inference.mcnemar_test(table)
+    _print_result(result, args.alpha)
+    return 0
+
+
+def cmd_mcnemar_exact(args) -> int:
+    table = [[float(x) for x in row.split(",")] for row in args.table.split(";")]
+    result = inference.mcnemar_exact_test(table)
     _print_result(result, args.alpha)
     return 0
 
@@ -379,6 +395,16 @@ def main(argv=None) -> int:
     p_fisher.add_argument("--table", required=True, help="2x2 table, rows separated by ';', values by ',' e.g. '3,1;1,3'")
     p_fisher.add_argument("--alpha", type=float, default=0.05)
     p_fisher.set_defaults(func=cmd_fisher)
+
+    p_mcnemar = sub.add_parser("mcnemar", help="McNemar's test for paired proportions (2x2 table, continuity-corrected chi-squared)")
+    p_mcnemar.add_argument("--table", required=True, help="2x2 table [[a,b],[c,d]], rows separated by ';', values by ',' e.g. '10,5;3,8'")
+    p_mcnemar.add_argument("--alpha", type=float, default=0.05)
+    p_mcnemar.set_defaults(func=cmd_mcnemar)
+
+    p_mcnemar_exact = sub.add_parser("mcnemar-exact", help="McNemar's exact test (binomial on discordant pairs) -- use for a small number of discordant pairs")
+    p_mcnemar_exact.add_argument("--table", required=True, help="2x2 table [[a,b],[c,d]], rows separated by ';', values by ',' e.g. '10,5;3,8'")
+    p_mcnemar_exact.add_argument("--alpha", type=float, default=0.05)
+    p_mcnemar_exact.set_defaults(func=cmd_mcnemar_exact)
 
     p_nonparam = sub.add_parser("nonparam", help="non-parametric alternatives to the t-test/ANOVA family")
     p_nonparam.add_argument("nonparam_kind", choices=["mann-whitney", "wilcoxon", "kruskal-wallis"])

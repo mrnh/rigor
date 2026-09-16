@@ -97,8 +97,14 @@ extra.
   one-/two-proportion z-tests, chi-squared goodness-of-fit and
   independence, Fisher's exact test (2x2, exact via the hypergeometric
   distribution — the small-sample alternative chi_square_independence's
-  own low-expected-count warning points to), one-way ANOVA, and
-  Levene's (Brown-Forsythe) test for equal variances. Each returns a
+  own low-expected-count warning points to), McNemar's test and
+  McNemar's exact test (2x2, for *paired* proportions -- e.g. the same
+  subjects' before/after answers -- which two_proportion_z_test's
+  independent-groups assumption gets wrong; the exact version is via
+  the binomial distribution on the discordant pairs, the same
+  small-sample relationship Fisher's exact test has to
+  chi_square_independence), one-way ANOVA, and Levene's
+  (Brown-Forsythe) test for equal variances. Each returns a
   `TestResult`: statistic, degrees of freedom, two-tailed p-value, a
   confidence interval, a citation, and assumption warnings (e.g. small-n
   normality reliance, low expected cell counts).
@@ -170,7 +176,7 @@ extra.
 - **`rigor/cli.py`** — a CLI over all of the above (`rigor.py` at the
   repo root is a thin shim so `python3 rigor.py ...` also works from a
   plain checkout, without installing anything).
-- **`rigor/mcp_server.py`** — an MCP tool wrapper exposing all 35
+- **`rigor/mcp_server.py`** — an MCP tool wrapper exposing all 37
   operations to any MCP client (Claude Code, Claude Desktop, etc.).
   Smoke-tested end-to-end over stdio against a real client — tool
   discovery plus representative calls checked against known reference
@@ -190,12 +196,13 @@ rigor nonparam mann-whitney --a 1,2,3 --b 4,5,6
 rigor power ttest-2samp --effect-size 0.5 --power 0.8
 rigor recommend --outcome-type continuous --n-groups 3   # which test fits?
 rigor posthoc --groups "1,2,3|4,5,6|7,8,9" --labels A,B,C  # pairwise + correction
+rigor mcnemar --table "794,86;150,570"    # paired proportions, e.g. before/after
 rigor sequential proportion --successes1 55 --n1 500 --successes2 40 --n2 500 --tau 0.05
                 # ^ peeking-safe -- rerun as n1/n2 grow, no correction needed
 rigor sequential peeking-inflation --n-looks 10   # ...vs. naively checking 10 times
-rigor --help   # full list of subcommands (ttest, ztest, chi2, fisher, anova,
-                # levene, nonparam, corr, regress, effect-size, power, correct,
-                # recommend, posthoc, sequential)
+rigor --help   # full list of subcommands (ttest, ztest, chi2, fisher, mcnemar,
+                # mcnemar-exact, anova, levene, nonparam, corr, regress,
+                # effect-size, power, correct, recommend, posthoc, sequential)
 ```
 
 or straight from a checkout without installing anything:
@@ -254,13 +261,13 @@ actually produce a non-finite value.
 python3 -m unittest discover -s tests -v
 ```
 
-189 tests: 170 exercise the statistics/decision logic directly
+203 tests: 182 exercise the statistics/decision logic directly
 (including, for `sequential.py`, a simulation check that the
 always-valid guarantee itself holds under repeated peeking, not just
 that a single p-value comes out right -- and, during development, a
 simulation catching a real bug: an early draft treated small-n complete
 separation as maximal evidence rather than the small-sample noise it
-usually is, which broke that same guarantee); 16 spawn `mcp_server.py`
+usually is, which broke that same guarantee); 18 spawn `mcp_server.py`
 as a real MCP client would and check results over the wire (skipped
 automatically if `mcp` isn't installed); 3 check that server.json's
 metadata (version, description length, name length) hasn't drifted

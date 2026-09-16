@@ -219,5 +219,88 @@ class TestFisherExactTest(unittest.TestCase):
             inf.fisher_exact_test([[-1, 2], [3, 4]])
 
 
+class TestMcNemarTest(unittest.TestCase):
+    def test_matches_textbook_reference_case(self):
+        # A before/after opinion table widely used to illustrate
+        # McNemar's test (e.g. Agresti, "Categorical Data Analysis"):
+        # [[794, 86], [150, 570]] -> continuity-corrected chi2 ~= 16.818,
+        # p < .0001. Independently reproducible from the formula:
+        # chi2 = (|b-c|-1)^2 / (b+c) = (|86-150|-1)^2 / (86+150).
+        result = inf.mcnemar_test([[794, 86], [150, 570]])
+        self.assertAlmostEqual(result.statistic, 16.81779661016949, places=6)
+        self.assertEqual(result.df, 1)
+        self.assertLess(result.p_value, 0.0001)
+
+    def test_confidence_interval_matches_independent_formula(self):
+        # CI for the marginal-proportion difference (c-b)/n, via Fleiss,
+        # Levin & Paik's Wald-type variance formula -- recomputed here
+        # independently of the module's own implementation.
+        a, b, c, d = 794, 86, 150, 570
+        n = a + b + c + d
+        diff = (c - b) / n
+        var = ((b + c) - (b - c) ** 2 / n) / n ** 2
+        import math as m
+        zcrit = 1.959963984540054  # normal_ppf(0.975)
+        expected = (diff - zcrit * m.sqrt(var), diff + zcrit * m.sqrt(var))
+        result = inf.mcnemar_test([[a, b], [c, d]])
+        self.assertAlmostEqual(result.confidence_interval[0], expected[0], places=6)
+        self.assertAlmostEqual(result.confidence_interval[1], expected[1], places=6)
+
+    def test_no_discordant_pairs_gives_no_evidence_not_crash(self):
+        result = inf.mcnemar_test([[10, 0], [0, 5]])
+        self.assertEqual(result.statistic, 0.0)
+        self.assertEqual(result.p_value, 1.0)
+        self.assertTrue(any("no discordant pairs" in w for w in result.warnings))
+
+    def test_small_discordant_count_warns_to_use_exact(self):
+        result = inf.mcnemar_test([[5, 1], [8, 2]])
+        self.assertTrue(any("mcnemar_exact_test" in w for w in result.warnings))
+
+    def test_large_discordant_count_does_not_warn(self):
+        result = inf.mcnemar_test([[794, 86], [150, 570]])
+        self.assertEqual(result.warnings, [])
+
+    def test_requires_2x2(self):
+        with self.assertRaises(ValueError):
+            inf.mcnemar_test([[1, 2, 3], [4, 5, 6]])
+
+    def test_requires_nonnegative_integer_counts(self):
+        with self.assertRaises(ValueError):
+            inf.mcnemar_test([[1.5, 2], [3, 4]])
+
+
+class TestMcNemarExactTest(unittest.TestCase):
+    def test_matches_brute_force_binomial_summation(self):
+        # Independently recomputed via math.comb rather than trusting
+        # this module's own _binom_pmf_half/_log_choose implementation:
+        # for b=1, c=8 (9 discordant pairs), the two-tailed exact test
+        # is 2 * P(X <= 1) for X ~ Binomial(9, 0.5).
+        import math as m
+        n = 9
+        expected = min(1.0, 2 * sum(m.comb(n, k) for k in range(0, 2)) / 2 ** n)
+        result = inf.mcnemar_exact_test([[5, 1], [8, 2]])
+        self.assertAlmostEqual(result.p_value, expected, places=9)
+        self.assertEqual(result.statistic, 1 - 8)
+
+    def test_no_discordant_pairs_gives_p_one_not_crash(self):
+        result = inf.mcnemar_exact_test([[10, 0], [0, 5]])
+        self.assertEqual(result.p_value, 1.0)
+        self.assertTrue(any("no discordant pairs" in w for w in result.warnings))
+
+    def test_perfectly_balanced_discordant_pairs_gives_high_p_value(self):
+        result = inf.mcnemar_exact_test([[10, 4], [4, 2]])
+        self.assertGreater(result.p_value, 0.9)
+        self.assertEqual(result.statistic, 0)
+
+    def test_agrees_in_direction_with_chi_squared_version(self):
+        chi2_result = inf.mcnemar_test([[5, 1], [8, 2]])
+        exact_result = inf.mcnemar_exact_test([[5, 1], [8, 2]])
+        self.assertEqual(chi2_result.reject_null(0.05), exact_result.reject_null(0.05))
+
+    def test_requires_2x2(self):
+        with self.assertRaises(ValueError):
+            inf.mcnemar_exact_test([[1, 2, 3], [4, 5, 6]])
+
+
 if __name__ == "__main__":
     unittest.main()

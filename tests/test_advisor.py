@@ -52,9 +52,10 @@ class TestRecommendTest(unittest.TestCase):
         self.assertEqual(r.recommended_tool, "two_proportion_z_test")
         self.assertEqual(r.effect_size_tool, "cohens_h")
 
-    def test_paired_proportions_flagged_as_a_gap(self):
+    def test_paired_proportions_routes_to_mcnemar(self):
         r = advisor.recommend_test("proportion", n_groups=2, paired=True)
-        self.assertTrue(any("McNemar" in c for c in r.caveats))
+        self.assertEqual(r.recommended_tool, "mcnemar_test")
+        self.assertEqual(r.alternative_tool, "mcnemar_exact_test")
 
     def test_three_plus_proportions_routes_to_chi_square(self):
         r = advisor.recommend_test("proportion", n_groups=3)
@@ -126,10 +127,11 @@ class TestRecommendTestCheckedRepeatedly(unittest.TestCase):
         self.assertEqual(r.recommended_tool, "one_way_anova")
         self.assertTrue(any("no always-valid sequential alternative" in c for c in r.caveats))
 
-    def test_paired_proportions_gets_both_the_mcnemar_and_sequential_caveats(self):
+    def test_paired_proportions_routes_to_mcnemar_with_a_sequential_gap_caveat(self):
+        # McNemar's test itself is implemented (no longer a gap), but
+        # there's still no sequential/always-valid version of it.
         r = advisor.recommend_test("proportion", n_groups=2, paired=True, checked_repeatedly=True)
-        self.assertEqual(r.recommended_tool, "two_proportion_z_test")
-        self.assertTrue(any("McNemar" in c for c in r.caveats))
+        self.assertEqual(r.recommended_tool, "mcnemar_test")
         self.assertTrue(any("no always-valid sequential alternative" in c for c in r.caveats))
 
     def test_association_is_not_mistaken_for_a_two_group_comparison(self):

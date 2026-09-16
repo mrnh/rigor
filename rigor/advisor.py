@@ -278,19 +278,27 @@ def recommend_test(
             )
             return _apply_checked_repeatedly(rec, outcome_type, n_groups, paired, small_or_skewed, checked_repeatedly)
         if n_groups == 2:
+            if paired:
+                rec = TestRecommendation(
+                    recommended_tool="mcnemar_test",
+                    reasoning=(
+                        "These are paired/matched proportions (e.g. the same "
+                        "subjects' yes/no answers before and after, or two raters "
+                        "on the same items) -- two_proportion_z_test assumes "
+                        "independent groups and gets the standard error wrong "
+                        "here. McNemar's test looks only at the discordant pairs, "
+                        "which is where all the information about a shift is."
+                    ),
+                    alternative_tool="mcnemar_exact_test",
+                    alternative_reasoning="Use instead when there are few discordant pairs -- mcnemar_test warns if so.",
+                )
+                return _apply_checked_repeatedly(rec, outcome_type, n_groups, paired, small_or_skewed, checked_repeatedly)
             rec = TestRecommendation(
                 recommended_tool="two_proportion_z_test",
                 reasoning="Comparing two independent proportions (e.g. conversion rates between two groups).",
                 effect_size_tool="cohens_h",
                 power_tool="power_for_two_proportion_test / sample_size_for_two_proportion_test",
             )
-            if paired:
-                rec.caveats.append(
-                    "These are paired/matched proportions (e.g. the same subjects "
-                    "before/after) -- two_proportion_z_test assumes independent "
-                    "groups and isn't quite right here. No matched-pairs proportion "
-                    "test (e.g. McNemar's) is implemented yet; treat this as a known gap."
-                )
             return _apply_checked_repeatedly(rec, outcome_type, n_groups, paired, small_or_skewed, checked_repeatedly)
         rec = TestRecommendation(
             recommended_tool="chi_square_independence",
