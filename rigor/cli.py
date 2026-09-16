@@ -42,12 +42,16 @@ straight from a checkout without installing):
     rigor recommend --outcome-type continuous --n-groups 3
     rigor recommend --outcome-type continuous --n-groups 2 --paired --small-or-skewed
     rigor posthoc --groups "1,2,3|4,5,6|7,8,9" --labels A,B,C
+    rigor sequential mean --a 1,2,3 --b 4,5,6 --tau 1.0        # peeking-safe
+    rigor sequential proportion --successes1 55 --n1 500 \\
+        --successes2 40 --n2 500 --tau 0.05
+    rigor sequential peeking-inflation --n-looks 10             # why it matters
 """
 import argparse
 import math
 import sys
 
-from rigor import advisor, batch, correlation, corrections, effect_size, inference, nonparametric, power, regression
+from rigor import advisor, batch, correlation, corrections, effect_size, inference, nonparametric, power, regression, sequential
 
 
 def _floats(csv: str):
@@ -95,6 +99,20 @@ def _print_regression(result: regression.RegressionResult) -> None:
     print(f"  citation    = {result.citation}")
     for w in result.warnings:
         print(f"  warning     : {w}")
+
+
+def _print_sequential(result: sequential.SequentialTestResult, alpha: float) -> None:
+    print(f"{result.name}")
+    print(f"  theta_hat (effect estimate) = {result.theta_hat:.6g}")
+    print(f"  se                          = {result.se:.6g}")
+    print(f"  tau (mixing prior sd)       = {result.tau:.6g}")
+    print(f"  z                           = {result.z:.6g}")
+    print(f"  mixture likelihood ratio    = {result.mixture_likelihood_ratio:.6g}")
+    print(f"  always-valid p-value        = {result.p_value:.6g}")
+    print(f"  reject H0 at alpha={alpha}: {result.reject_null(alpha)}")
+    print(f"  citation                    = {result.citation}")
+    for w in result.warnings:
+        print(f"  warning                     : {w}")
 
 
 def _print_recommendation(rec: advisor.TestRecommendation) -> None:
@@ -293,6 +311,25 @@ def cmd_posthoc(args) -> int:
     return 0
 
 
+def cmd_sequential(args) -> int:
+    if args.sequential_kind == "mean":
+        result = sequential.sequential_two_sample_mean_test(
+            _floats(args.a), _floats(args.b), args.tau, equal_var=args.equal_var
+        )
+        _print_sequential(result, args.alpha)
+    elif args.sequential_kind == "proportion":
+        result = sequential.sequential_two_proportion_test(
+            args.successes1, args.n1, args.successes2, args.n2, args.tau
+        )
+        _print_sequential(result, args.alpha)
+    else:  # peeking-inflation
+        out = sequential.naive_peeking_inflation(args.n_looks, args.alpha, args.trials)
+        print(f"Naive repeated peeking, {out['n_looks']} looks, nominal alpha={out['nominal_alpha']}")
+        print(f"  estimated true alpha = {out['estimated_true_alpha']:.6g} (+/- {out['monte_carlo_se']:.4g} MC SE, {out['trials']} trials)")
+        print(f"  citation             = {out['citation']}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Classical statistical inference, verified and citable.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -414,6 +451,21 @@ def main(argv=None) -> int:
     p_posthoc.add_argument("--correction", choices=["bonferroni", "bh", "none"], default="bh")
     p_posthoc.add_argument("--alpha", type=float, default=0.05)
     p_posthoc.set_defaults(func=cmd_posthoc)
+
+    p_sequential = sub.add_parser("sequential", help="always-valid (peeking-safe) sequential tests -- mSPRT")
+    p_sequential.add_argument("sequential_kind", choices=["mean", "proportion", "peeking-inflation"])
+    p_sequential.add_argument("--a", help="comma-separated sample A so far (mean)")
+    p_sequential.add_argument("--b", help="comma-separated sample B so far (mean)")
+    p_sequential.add_argument("--equal-var", dest="equal_var", action="store_true", help="only for mean: pooled variance instead of Welch's")
+    p_sequential.add_argument("--successes1", type=int, help="successes so far in group 1 (proportion)")
+    p_sequential.add_argument("--n1", type=int, help="observations so far in group 1 (proportion)")
+    p_sequential.add_argument("--successes2", type=int, help="successes so far in group 2 (proportion)")
+    p_sequential.add_argument("--n2", type=int, help="observations so far in group 2 (proportion)")
+    p_sequential.add_argument("--tau", type=float, help="mixing prior's sd over the true effect, in the metric's own units (mean/proportion) -- e.g. the smallest difference worth detecting")
+    p_sequential.add_argument("--n-looks", dest="n_looks", type=int, help="how many times the result gets checked (peeking-inflation)")
+    p_sequential.add_argument("--trials", type=int, default=20000, help="Monte Carlo trials (peeking-inflation)")
+    p_sequential.add_argument("--alpha", type=float, default=0.05)
+    p_sequential.set_defaults(func=cmd_sequential)
 
     args = parser.parse_args(argv)
     return args.func(args)

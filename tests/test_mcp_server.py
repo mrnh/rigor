@@ -52,7 +52,7 @@ class TestMCPServer(unittest.TestCase):
         _, names = asyncio.run(_call(
             "one_sample_t_test", {"data": [1, 2, 3, 4, 5], "mu0": 0}
         ))
-        self.assertEqual(len(names), 32)
+        self.assertEqual(len(names), 35)
 
     def test_sample_size_matches_cohen_1988_reference_case(self):
         # d=0.5, alpha=.05, power=.80 -> textbook answer n~=64 per group.
@@ -118,6 +118,29 @@ class TestMCPServer(unittest.TestCase):
         self.assertEqual(len(result["comparisons"]), 3)
         pairs = {(c["group_i"], c["group_j"]) for c in result["comparisons"]}
         self.assertEqual(pairs, {(0, 1), (0, 2), (1, 2)})
+
+    def test_sequential_two_proportion_test_round_trips_correctly(self):
+        result, _ = asyncio.run(_call(
+            "sequential_two_proportion_test",
+            {"successes1": 600, "n1": 1000, "successes2": 400, "n2": 1000, "tau": 0.05},
+        ))
+        self.assertAlmostEqual(result["theta_hat"], -0.2)
+        self.assertTrue(result["reject_null"])
+        self.assertLess(result["p_value"], 0.01)
+
+    def test_sequential_two_sample_mean_test_round_trips_correctly(self):
+        result, _ = asyncio.run(_call(
+            "sequential_two_sample_mean_test",
+            {"a": [1, 2, 3, 4, 5], "b": [4, 5, 6, 7, 8], "tau": 1.0},
+        ))
+        self.assertAlmostEqual(result["theta_hat"], 3.0)
+        self.assertIn("small", result["warnings"][0])
+
+    def test_naive_peeking_inflation_round_trips_correctly(self):
+        result, _ = asyncio.run(_call(
+            "naive_peeking_inflation", {"n_looks": 10, "alpha": 0.05, "trials": 2000},
+        ))
+        self.assertGreater(result["estimated_true_alpha"], 0.05)
 
     def test_cohens_d_zero_variance_edge_case_is_handled_not_crashed(self):
         # Regression test for a real bug found in practice: cohens_d

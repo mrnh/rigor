@@ -91,7 +91,7 @@ from typing import Annotated
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
-from rigor import advisor, batch, correlation, corrections, effect_size, inference, nonparametric, power, regression
+from rigor import advisor, batch, correlation, corrections, effect_size, inference, nonparametric, power, regression, sequential
 
 mcp = MCPServer("rigor")
 
@@ -171,6 +171,24 @@ def _pairwise_dict(result: batch.PairwiseComparisonResult) -> dict:
             }
             for c in result.comparisons
         ],
+    }
+
+
+def _sequential_dict(result: sequential.SequentialTestResult, alpha: float = 0.05) -> dict:
+    return {
+        "name": result.name,
+        "theta_hat": result.theta_hat,
+        "se": result.se,
+        "tau": result.tau,
+        "z": result.z,
+        "mixture_likelihood_ratio": result.mixture_likelihood_ratio,
+        "p_value": result.p_value,
+        "reject_null": result.reject_null(alpha),
+        "alpha": alpha,
+        "n1": result.n1,
+        "n2": result.n2,
+        "citation": result.citation,
+        "warnings": result.warnings,
     }
 
 
@@ -664,6 +682,69 @@ def recommend_test(
     return _recommendation_dict(advisor.recommend_test(
         outcome_type, n_groups, paired, small_or_skewed, two_categorical_variables, testing_association,
     ))
+
+
+@mcp.tool(annotations=_PURE)
+def sequential_two_sample_mean_test(
+    a: Annotated[List[float], Field(description="first group's observations so far -- can be re-checked as more come in")],
+    b: Annotated[List[float], Field(description="second group's observations so far, same units as a")],
+    tau: Annotated[float, Field(description="mixing prior's standard deviation over the true mean difference, in a/b's own units -- e.g. the smallest difference worth caring about. Not a threshold; see the tool's docstring")],
+    equal_var: Annotated[bool, Field(description="assume equal population variances (pooled) instead of Welch's, same meaning as two_sample_t_test's equal_var")] = False,
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """Always-valid test of whether two groups' means differ, safe to
+    call again after every new observation in either group -- unlike
+    two_sample_t_test, which needs a sample size decided in advance and
+    gives no such guarantee if checked repeatedly and stopped at the
+    first significant look (that repeated-checking failure mode is
+    exactly what inflates false positives; see naive_peeking_inflation
+    for a demonstration). Use this instead of two_sample_t_test whenever
+    a result will be (or already has been) checked more than once as
+    data accumulates, e.g. monitoring a live experiment. Returns the
+    current effect estimate, its standard error, the mixture likelihood
+    ratio and always-valid p-value, and assumption warnings. tau does
+    not need to be exact -- reuse the minimum-detectable-effect you'd
+    otherwise plug into sample_size_for_two_sample_t_test."""
+    return _sequential_dict(sequential.sequential_two_sample_mean_test(a, b, tau, equal_var=equal_var), alpha)
+
+
+@mcp.tool(annotations=_PURE)
+def sequential_two_proportion_test(
+    successes1: Annotated[int, Field(description="successes (e.g. conversions) observed so far in group 1")],
+    n1: Annotated[int, Field(description="observations so far in group 1")],
+    successes2: Annotated[int, Field(description="successes observed so far in group 2")],
+    n2: Annotated[int, Field(description="observations so far in group 2")],
+    tau: Annotated[float, Field(description="mixing prior's standard deviation over the true proportion difference -- e.g. 0.02 for 'I mainly care about a 2-point-or-larger swing'. Not a threshold; see the tool's docstring")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """Always-valid test of whether two proportions (e.g. two conversion
+    rates in a live A/B test) differ, safe to call again after every new
+    observation in either group -- the sequential-monitoring counterpart
+    to two_proportion_z_test. Use this instead whenever the result will
+    be checked more than once before the experiment ends, which is the
+    normal case for a live dashboard rather than a one-shot analysis.
+    p1 and p2 are interchangeable (only their difference matters). tau
+    does not need to be exact -- reuse the minimum-detectable-effect
+    you'd otherwise plug into sample_size_for_two_proportion_test."""
+    return _sequential_dict(sequential.sequential_two_proportion_test(successes1, n1, successes2, n2, tau), alpha)
+
+
+@mcp.tool(annotations=_PURE)
+def naive_peeking_inflation(
+    n_looks: Annotated[int, Field(description="how many times the result gets checked as data accumulates")],
+    alpha: _Alpha = 0.05,
+    trials: Annotated[int, Field(description="Monte Carlo trials -- higher is more precise but slower; the result reports its own standard error")] = 20000,
+) -> dict:
+    """Demonstrates, by simulation, why sequential_two_sample_mean_test /
+    sequential_two_proportion_test exist: the actual false-positive rate
+    of checking an *ordinary* fixed-sample test (two_sample_t_test,
+    two_proportion_z_test, ...) after every new observation and stopping
+    the first time it clears alpha, versus the alpha actually intended.
+    Call this to show a skeptical stakeholder concretely what "just
+    peek at the dashboard and stop early" costs before recommending the
+    always-valid alternative. Returns the estimated true false-positive
+    rate, its Monte Carlo standard error, and a citation."""
+    return sequential.naive_peeking_inflation(n_looks, alpha, trials)
 
 
 @mcp.tool(annotations=_PURE)
