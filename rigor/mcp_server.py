@@ -35,14 +35,14 @@ math-from-scratch-verified-against-an-identity treatment the rest of
 this package gets (there's no statistic to get numerically wrong;
 they compose already-verified tools). Smoke-tested against a
 real MCP client (stdio transport, tool discovery + representative calls
-across all 32 tools; see tests/test_mcp_server.py).
+across all 37 tools; see tests/test_mcp_server.py).
 
 Every tool carries the same ToolAnnotations (_PURE): every one of them
 is a stateless, deterministic calculation over its arguments -- no I/O,
 no external calls, no mutation, calling twice with the same input always
 gives the same answer. read_only_hint/idempotent_hint=True and
 destructive_hint/open_world_hint=False are simply true statements about
-all 32, not a per-tool judgment call.
+all 37, not a per-tool judgment call.
 
 Every parameter also carries an explicit Field(description=...) rather
 than relying on the docstring alone: the MCP SDK does not parse a
@@ -96,7 +96,7 @@ from rigor import advisor, batch, correlation, corrections, effect_size, inferen
 mcp = MCPServer("rigor")
 
 # Shared by every tool below -- see the module docstring for why this is
-# a true statement about all 32 rather than a per-tool judgment call.
+# a true statement about all 37 rather than a per-tool judgment call.
 _PURE = ToolAnnotations(
     read_only_hint=True,
     destructive_hint=False,
@@ -357,6 +357,39 @@ def fisher_exact_test(
     Returns the sample odds ratio as ``statistic`` (can be inf/0 for a
     zero cell), a two-tailed p-value, a citation, and warnings."""
     return _result_dict(inference.fisher_exact_test(table), alpha)
+
+
+@mcp.tool(annotations=_PURE)
+def mcnemar_test(
+    table: Annotated[List[List[int]], Field(description="2x2 table as [[a, b], [c, d]]: a/d are pairs that agree both times, b/c are the discordant pairs (b: positive then negative, c: negative then positive) -- raw non-negative integer counts")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """Test whether two paired proportions are equal -- e.g. the same
+    subjects' yes/no answers before and after an intervention, or two
+    raters' calls on the same items. Use this instead of
+    two_proportion_z_test whenever the "two groups" are actually the
+    same subjects measured twice; two_proportion_z_test assumes
+    independent groups and gets the standard error wrong for paired
+    data. Yates continuity-corrected chi-squared, 1 df -- use
+    mcnemar_exact_test instead when there are few discordant pairs
+    (this warns when there are). Returns that chi-squared statistic, a
+    p-value, and a confidence interval for the difference in marginal
+    proportions."""
+    return _result_dict(inference.mcnemar_test(table), alpha)
+
+
+@mcp.tool(annotations=_PURE)
+def mcnemar_exact_test(
+    table: Annotated[List[List[int]], Field(description="2x2 table as [[a, b], [c, d]], same layout as mcnemar_test -- raw non-negative integer counts")],
+    alpha: _Alpha = 0.05,
+) -> dict:
+    """Exact version of mcnemar_test: an exact binomial test (p=0.5) on
+    the discordant pairs instead of the chi-squared approximation -- the
+    small-sample-safe alternative mcnemar_test's own warning points to,
+    the same relationship fisher_exact_test has to
+    chi_square_independence. ``statistic`` is b-c (the raw
+    discordant-pair imbalance); the p-value is two-tailed."""
+    return _result_dict(inference.mcnemar_exact_test(table), alpha)
 
 
 @mcp.tool(annotations=_PURE)

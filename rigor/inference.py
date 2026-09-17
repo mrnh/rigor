@@ -342,6 +342,16 @@ def _hypergeom_pmf(a: int, row1: int, row2: int, col1: int) -> float:
     return math.exp(_log_choose(row1, a) + _log_choose(row2, col1 - a) - _log_choose(row1 + row2, col1))
 
 
+def _validate_2x2_table(table: Sequence[Sequence[float]]) -> Tuple[int, int, int, int]:
+    if len(table) != 2 or len(table[0]) != 2 or len(table[1]) != 2:
+        raise ValueError("needs a 2x2 table")
+    (a, b), (c, d) = table
+    for v in (a, b, c, d):
+        if v != int(v) or v < 0:
+            raise ValueError("all cell counts must be non-negative integers")
+    return int(a), int(b), int(c), int(d)
+
+
 def fisher_exact_test(table: Sequence[Sequence[float]]) -> TestResult:
     """H0: the row and column variables of a 2x2 contingency table are
     independent. Exact -- computed from the hypergeometric distribution
@@ -355,13 +365,7 @@ def fisher_exact_test(table: Sequence[Sequence[float]]) -> TestResult:
     [[a,b],[c,d]]); +-inf/0 when a zero cell makes it degenerate. The
     p-value is two-tailed, summing every table's probability that is no
     larger than the observed table's."""
-    if len(table) != 2 or len(table[0]) != 2 or len(table[1]) != 2:
-        raise ValueError("fisher_exact_test needs a 2x2 table")
-    (a, b), (c, d) = table
-    for v in (a, b, c, d):
-        if v != int(v) or v < 0:
-            raise ValueError("all cell counts must be non-negative integers")
-    a, b, c, d = int(a), int(b), int(c), int(d)
+    a, b, c, d = _validate_2x2_table(table)
     row1, row2 = a + b, c + d
     col1, col2 = a + c, b + d
     n = row1 + row2
@@ -390,4 +394,101 @@ def fisher_exact_test(table: Sequence[Sequence[float]]) -> TestResult:
         p_value=p_value,
         citation="Fisher's exact test (Fisher, 1922), two-tailed via summing hypergeometric probabilities no larger than the observed table's.",
         warnings=warnings,
+    )
+
+
+def _binom_pmf_half(k: int, n: int) -> float:
+    """P(X == k) for X ~ Binomial(n, 0.5) -- the only p mcnemar_exact_test needs."""
+    return math.exp(_log_choose(n, k) - n * math.log(2))
+
+
+def mcnemar_test(table: Sequence[Sequence[float]], confidence_level: float = 0.95) -> TestResult:
+    """H0: the two paired proportions are equal -- e.g. the same subjects'
+    "yes/no" answers before and after some intervention, or two raters'
+    calls on the same items. table = [[a, b], [c, d]] where the first
+    index is the first measurement's outcome (positive/negative) and the
+    second is the second measurement's; a and d are the concordant pairs
+    (agree both times) and carry no information about a *shift* -- only
+    the discordant pairs b (positive then negative) and c (negative then
+    positive) do. Use this instead of two_proportion_z_test whenever the
+    "two groups" are actually the same subjects measured twice --
+    two_proportion_z_test assumes independent groups and gets paired
+    data wrong (its standard error ignores the pairing entirely).
+
+    Yates continuity-corrected chi-squared statistic, 1 df. ``statistic``
+    is that corrected chi-squared value (not a difference or ratio,
+    unlike most tests here); the confidence interval is for the
+    difference in marginal proportions (second minus first), via the
+    Wald-type formula in Fleiss, Levin & Paik (2003) -- the same
+    reference power.py's two-proportion power formula uses. Falls back
+    to reporting b-c's raw imbalance as a warning-only escape hatch when
+    there are no discordant pairs at all (a chi-squared statistic isn't
+    defined at 0/0). Use mcnemar_exact_test instead when b+c is small
+    (this test warns when it is), the same relationship
+    fisher_exact_test has to chi_square_independence.
+    """
+    a, b, c, d = _validate_2x2_table(table)
+    n = a + b + c + d
+    if n == 0:
+        raise ValueError("table is empty")
+    warnings = []
+    discordant = b + c
+    if discordant == 0:
+        stat, p_value = 0.0, 1.0
+        warnings.append("no discordant pairs (b=c=0) -- the concordant pairs a and d carry no information about a shift, so there's nothing here to test.")
+    else:
+        stat = (abs(b - c) - 1) ** 2 / discordant
+        p_value = 1 - dist.chi2_cdf(stat, df=1)
+        if discordant < 25:
+            warnings.append(f"only {discordant} discordant pair(s) -- use mcnemar_exact_test instead for a small-sample-safe answer (same relationship fisher_exact_test has to chi_square_independence).")
+    diff = (c - b) / n
+    var_diff = max(0.0, (discordant - (b - c) ** 2 / n) / (n ** 2))
+    zcrit = dist.normal_ppf(1 - (1 - confidence_level) / 2)
+    se = math.sqrt(var_diff)
+    ci = (diff - zcrit * se, diff + zcrit * se)
+    return TestResult(
+        name="McNemar's test",
+        statistic=stat,
+        df=1,
+        p_value=p_value,
+        confidence_interval=ci,
+        confidence_level=confidence_level,
+        citation="McNemar's test (McNemar, 1947), Yates continuity-corrected; CI for the marginal-proportion difference via Fleiss, Levin & Paik (2003).",
+        warnings=warnings,
+    )
+
+
+def mcnemar_exact_test(table: Sequence[Sequence[float]]) -> TestResult:
+    """Exact version of mcnemar_test: an exact binomial test (p=0.5) on
+    the discordant pairs b, c instead of the chi-squared approximation --
+    the small-sample-safe alternative mcnemar_test's own warning points
+    to when there are few discordant pairs, the same relationship
+    fisher_exact_test has to chi_square_independence.
+
+    ``statistic`` is b-c (the raw discordant-pair imbalance, positive if
+    more pairs flipped from the first outcome to the second than the
+    other way); the p-value is two-tailed, summing every possible
+    discordant-pair split at least as extreme as the observed one under
+    Binomial(b+c, 0.5)."""
+    a, b, c, d = _validate_2x2_table(table)
+    discordant = b + c
+    if discordant == 0:
+        return TestResult(
+            name="McNemar's exact test",
+            statistic=0,
+            p_value=1.0,
+            citation="McNemar's exact test (binomial test on discordant pairs at p=0.5).",
+            warnings=["no discordant pairs (b=c=0) -- the concordant pairs a and d carry no information about a shift, so there's nothing here to test."],
+        )
+    observed_p = _binom_pmf_half(min(b, c), discordant)
+    p_value = min(1.0, sum(
+        p for x in range(discordant + 1)
+        if (p := _binom_pmf_half(x, discordant)) <= observed_p * (1 + 1e-7)
+    ))
+    return TestResult(
+        name="McNemar's exact test",
+        statistic=b - c,
+        p_value=p_value,
+        citation="McNemar's exact test (binomial test on discordant pairs at p=0.5).",
+        warnings=[],
     )

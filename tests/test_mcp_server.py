@@ -52,7 +52,7 @@ class TestMCPServer(unittest.TestCase):
         _, names = asyncio.run(_call(
             "one_sample_t_test", {"data": [1, 2, 3, 4, 5], "mu0": 0}
         ))
-        self.assertEqual(len(names), 35)
+        self.assertEqual(len(names), 37)
 
     def test_sample_size_matches_cohen_1988_reference_case(self):
         # d=0.5, alpha=.05, power=.80 -> textbook answer n~=64 per group.
@@ -81,6 +81,16 @@ class TestMCPServer(unittest.TestCase):
     def test_fisher_exact_matches_lady_tasting_tea_reference_case(self):
         result, _ = asyncio.run(_call("fisher_exact_test", {"table": [[3, 1], [1, 3]]}))
         self.assertAlmostEqual(result["p_value"], 0.4857142857142857)
+
+    def test_mcnemar_test_matches_textbook_reference_case(self):
+        result, _ = asyncio.run(_call("mcnemar_test", {"table": [[794, 86], [150, 570]]}))
+        self.assertAlmostEqual(result["statistic"], 16.81779661016949, places=6)
+        self.assertTrue(result["reject_null"])
+
+    def test_mcnemar_exact_test_round_trips_correctly(self):
+        result, _ = asyncio.run(_call("mcnemar_exact_test", {"table": [[5, 1], [8, 2]]}))
+        self.assertEqual(result["statistic"], -7)
+        self.assertAlmostEqual(result["p_value"], 0.0390625, places=9)
 
     def test_pearson_correlation_round_trips_correctly(self):
         result, _ = asyncio.run(_call(
